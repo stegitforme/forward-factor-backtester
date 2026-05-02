@@ -1,0 +1,37 @@
+# Core data + computation
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Polygon.io official client
+polygon-api-client>=1.13.0
+
+# Date/time handling
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# HTTP & retries
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Caching layer for API responses
+diskcache>=5.6.0
+
+# Plotting / dashboard
+matplotlib>=3.7.0
+plotly>=5.17.0
+
+# Progress bars
+tqdm>=4.66.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Notebook support
+jupyter>=1.0.0
+ipykernel>=6.25.0
+
+# Type hints / dev quality
+mypy>=1.5.0
+types-requests>=2.31.0
