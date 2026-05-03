@@ -1,6 +1,8 @@
 # Claude Code Handoff: Forward Factor Backtester
 
-## TL;DR — Research arc complete (2026-05-02)
+## TL;DR — Research arc PROVISIONALLY complete (2026-05-03)
+
+> **Status update (2026-05-03)**: 2024 attribution analysis revealed strong concentration — top 5 trades = 85.4% of 2024 P&L; one IWM 60-90 trade (Jul 18 → Sep 19, 1,578 contracts at $0.03 debit, +$304,868) is **22.4% of the entire 4.3-year strategy P&L**. The same near-zero-debit Kelly-overscale pattern produced both this win AND the KRE Apr 2026 catastrophe — structural property, not coincidence. Path 1 sensitivity (allocation sweep without that trade) shows the 70/30 max-Sharpe answer is **structurally robust** — max-Sharpe mix stays at 30% FF, but magnitude of benefit shrinks (Sharpe 1.26 → 1.20, CAGR uplift 7.85pp → 5.73pp vs pure TQQQ-VT). Two further validations pending before research arc closes definitively: (a) ORATS extended-history backtest covering 2008/2018/2020 regimes (~10-14 days ETA) and (b) debit-floor cap re-evaluation on 23-ticker universe. Deployment recommendation now bracketed as **5-10% live + 15% paper trade as initial Phase A**, with full sizing decision deferred until ORATS validation.
 
 Independent backtest of the **Forward Factor calendar spread strategy** (Volatility Vibes / Campasano 2018), expanded to a 23-ticker multi-asset universe. Pipeline runs end-to-end on Polygon Options Advanced via `discover_candidates` → `simulate_portfolio` (refactored architecture, see "Pipeline" below).
 
@@ -28,6 +30,20 @@ Independent backtest of the **Forward Factor calendar spread strategy** (Volatil
 | 0/100 (pure FF) | +32.78% | 26.68% | 0.79 | 1.23 |
 
 **Adding FF improves both CAGR AND MaxDD vs pure TQQQ-VT across every mix tested** — textbook diversification, driven by the −0.107 correlation. Max-Sharpe at 30% FF is in Steven's "meaningful allocation" bucket (>15%), not satellite.
+
+### Bracketed allocation answer (post-2024-attribution sensitivity, 2026-05-03)
+
+The allocation answer above is the **OPTIMISTIC case** — it uses the full sample including the IWM Jul 2024 outlier trade ($304,868, 22.4% of total strategy P&L). The Path 1 sensitivity analysis (script: `scripts/phase4_t1_no_iwm_sensitivity.py`, report: `output/PHASE_4_T1_ALLOCATION_NO_IWM_JUL_2024.md`) recomputed everything with that single trade removed:
+
+| Case | Mix | CAGR | MaxDD% | Sharpe | Calmar |
+|---|---|---:|---:|---:|---:|
+| **Optimistic** (with IWM Jul 2024) | 70/30 | +32.31% | 21.13% | **1.26** | 1.53 |
+| **Realistic** (without the outlier) | 70/30 | +30.19% | 21.13% | **1.20** | 1.43 |
+| **Forward-looking** | TBD | TBD | TBD | TBD | TBD |
+
+**Max-Sharpe mix unchanged at 70/30** in both cases — strategy is structurally diversifying, the IWM trade was bonus not foundation. Magnitude of CAGR uplift vs pure TQQQ-VT shrinks from +7.85pp to +5.73pp; Sharpe uplift from +0.36 to +0.30. Both still meaningful improvements.
+
+**Forward-looking case requires ORATS extended-history backtest** (~10-14 days ETA). The near-zero-debit Kelly-overscale pattern produced both the IWM Jul 2024 +$304K winner AND the KRE Apr 2026 −$258K loss — same execution pattern, opposite outcomes. Whether this pattern produces outliers consistently across regimes (2008/2018/2020) or whether 2022-2026 was unusually lucky is the open question that determines forward-CAGR expectation.
 
 **Primary user**: Steven Goglanian, sgoglanian@gmail.com. Polygon Options Advanced paid through May 14, 2026 — downgrade May 30.
 
@@ -509,24 +525,29 @@ The research arc is complete; what remains is an allocation decision and operati
 - Daily exit management (T-1 of front expiry triggers close; need to monitor for the SPY-deep-ITM fallback pattern + KRE drift cases)
 - Polygon Options Advanced for live data (or downgrade to Starter once backtest is sealed; live execution doesn't need the historical-data tier)
 
-### Recommended path (NOT immediate 30% deployment)
+### Recommended path (UPDATED 2026-05-03 post-2024-attribution)
 
 **Phase A — Live + paper validation (months 1-6).**
-- Allocate **5-10% of liquid NW** to live FF Tier 1 (small-stake, real fills)
-- Run **25% of liquid NW as a paper-trade** of FF Tier 1 alongside (no capital at risk; just track the strategy's live-execution behavior)
-- Compare live + paper P&L to backtest expectations weekly
-- Watch specifically for: (a) fallback-warning frequency in production vs the 3.7% backtest rate, (b) actual fill quality vs the 5% slippage assumption, (c) earnings-blocking accuracy on hardcoded calendar (verify META/NVDA/TSLA dates as they happen)
-- If 6-month live + paper match backtest within ±5pp annualized → proceed to Phase B
+- Allocate **5-10% of liquid NW** to live FF Tier 1 (small-stake, real fills) — sized at the *low end* of the original 5-10% range pending ORATS validation
+- Run **15% of liquid NW as paper-trade** of FF Tier 1 alongside (down from prior 25% paper recommendation; the smaller paper allocation matches the discounted forward-CAGR expectation from the realistic case)
+- Compare live + paper P&L to **realistic-case** backtest expectations (+30.19% CAGR, 21.13% DD in 70/30 mix), NOT optimistic-case (+32.31%)
+- Watch specifically for: (a) fallback-warning frequency vs 3.7% backtest rate, (b) actual fill quality vs 5% slippage, (c) earnings-blocking accuracy, **(d) NEW: any near-zero-debit (entry < $0.10) trade sizing — flag immediately for review even if Kelly says size big**
+- If 6-month live + paper match realistic-case backtest within ±5pp annualized AND ORATS validates pattern repeatability → proceed to Phase B
 
-**Phase B — Scale to max-Sharpe allocation (months 7-12).**
-- If Phase A clears, scale to the canonical **30% FF / 70% TQQQ-VT** max-Sharpe mix
-- Implement daily-rebalanced fixed-weight overlay (or quarterly rebalance if daily friction is too high — re-test backtest at quarterly to confirm degradation is small)
-- Continue live monitoring; track Sharpe + MaxDD vs backtest expectations
+**Phase B — Full sizing decision (months 7-12, GATED on ORATS results).**
+- If ORATS extended history (2008/2018/2020) shows the near-zero-debit Kelly-overscale pattern produces outliers consistently and bidirectionally → scale to the canonical 30% FF / 70% TQQQ-VT max-Sharpe mix
+- If ORATS shows 2022-2026 was unusually lucky on this pattern → cap FF allocation at the lower end (10-15%), well below max-Sharpe
+- If ORATS shows the strategy degrades materially in pre-2022 regimes → defer Phase B indefinitely; treat Phase A as terminal
+- Implement daily-rebalanced (or quarterly) fixed-weight overlay; track Sharpe + MaxDD vs ORATS-informed expectations
 
 **Phase C — Re-evaluate (month 12+).**
 - 12 months of live data is enough to start updating priors meaningfully
 - If live Sharpe ≥ backtest Sharpe − 0.20 AND MaxDD ≤ backtest MaxDD + 5pp → strategy is performing in expectation; consider 50/50 max-Calmar mix
 - If live drifts materially worse → reduce allocation, not eliminate; the −0.107 correlation makes even reduced FF a net portfolio improver
+
+### Why the deployment changed from prior version (2026-05-02 → 2026-05-03)
+
+The prior version recommended scaling to 30% FF after Phase A success. The 2024 attribution analysis revealed that the strategy's edge is materially concentrated: top 5 trades = 85.4% of 2024 P&L; the IWM Jul 2024 trade alone is 22.4% of the entire 4.3-year strategy P&L. The same near-zero-debit Kelly-overscale pattern produced both the IWM win AND the KRE Apr 2026 catastrophe — symmetric upside/downside. Until ORATS extended history reveals whether this pattern is consistent or 2022-2026-specific, the responsible path is to defer the full-sizing commitment.
 
 ### Allocation criteria scorecard (vs Steven's README)
 
@@ -553,21 +574,27 @@ Do **NOT** run any of these without strong new evidence justifying the cost:
 
 If any of these are revisited, do it because of **specific new evidence** (e.g., live-trading data showing a regime not represented in backtest), not because of process inertia.
 
-## Open Follow-ups Queued (not blocked, not immediate)
+## Open Follow-ups (split: BLOCKING vs queued)
 
-These are productive next steps if the strategy is deployed and Steven wants to refine, but none block the allocation decision:
+### BLOCKING the full-sizing allocation decision (Phase B gate)
 
-1. **Extend backtest to May 2021** — Polygon's 5-year cap allows ~7 more months of pre-2022 data. Adds the 2021 low-vol regime, which is potentially a different stress case than anything in 2022-2026. ~1 hour compute (mostly fresh fetches for new universe at new dates).
+These two items must land before the strategy graduates from Phase A (5-10% live + 15% paper) to Phase B (full max-Sharpe sizing):
 
-2. **2024 per-quarter / per-ticker attribution** — 2024 contributed disproportionately (+87% in 2024 alone per Phase 3 per-year breakdown). Was this broad-based across the whole year, or concentrated in 1-2 quarters / 1-2 tickers? If concentrated, the +32.78% full-sample CAGR may overstate the steady-state expectation. ~30 min analysis on existing trade log.
+1. **ORATS extended-history backtest** (~10-14 days ETA, data acquisition pending). Re-run the canonical Tier 1 config on ORATS data covering 2008 GFC, 2018 vol blowup, 2020 COVID. Specifically test whether the **near-zero-debit Kelly-overscale pattern** that produced both the IWM Jul 2024 +$304K winner AND the KRE Apr 2026 −$258K loss appears consistently across regimes or whether 2022-2026 was unusually lucky on this pattern. This is the Phase B gate per the updated deployment path.
 
-3. **Live execution diary** — if Steven proceeds with Phase A. Track every live trade vs the backtest's predicted entry, fill price, exit pricing. Surfaces real-vs-backtest gaps that don't show up in any pre-trade analysis.
+2. **Debit-floor cap re-evaluation on 23-ticker universe** (Path 2 from prior post-attribution recommendations, deferred until ORATS data lands). Cap 2 (debit-floor NAV cap) was rejected in Phase 3.5 on the 17-ticker universe because it cost 7.5pp CAGR. On the 23-ticker universe with the IWM Jul 2024 outlier dominating, the tradeoff math is different. Re-run with Cap 2 active; compare CAGR/MaxDD/Sharpe deltas. Quick (<30 min) once we know whether ORATS validates the pattern.
 
-4. **Verbatim VV transcript quotes** — Steven to paste into Spec Sources section when convenient. Doesn't block anything; just makes the spec record auditable for future sessions.
+### Queued (productive when convenient, not blocking)
 
-5. **TQQQ benchmark drift fix** — `src/benchmark.py` shows 3-5pp CAGR drift vs Steven's reference numbers because Polygon's TQQQ history only goes back ~2022. Could supplement with yfinance for pre-2022 if anyone needs the older comparison. Low priority — TQQQ-VT (Steven's actual current strategy) is the relevant benchmark and we have its full daily curve.
+3. **Extend backtest to May 2021** — Polygon's 5-year cap allows ~7 more months of pre-2022 data. Adds the 2021 low-vol regime. Less informative than ORATS extended history but easier to obtain (already have Polygon access). ~1 hour compute.
 
-6. **`compute_options_volume_universe`** stub — never implemented; current production uses static smoke universes. Only matters if you want dynamic universe refresh based on options-volume thresholds, which isn't necessary for the canonical Tier 1 23-ticker config.
+4. **Live execution diary** — if Steven proceeds with Phase A. Track every live trade vs backtest's predicted entry, fill price, exit pricing. Surfaces real-vs-backtest gaps that don't show up in any pre-trade analysis.
+
+5. **Verbatim VV transcript quotes** — Steven to paste into Spec Sources section when convenient. Doesn't block anything; makes the spec record auditable.
+
+6. **TQQQ benchmark drift fix** — `src/benchmark.py` shows 3-5pp CAGR drift vs Steven's reference numbers because Polygon's TQQQ history only goes back ~2022. Could supplement with yfinance for pre-2022 if anyone needs the older comparison. Low priority — TQQQ-VT (Steven's actual current strategy) is the relevant benchmark and we have its full daily curve.
+
+7. **`compute_options_volume_universe`** stub — never implemented; current production uses static smoke universes. Only matters if you want dynamic universe refresh.
 
 ## Operational notes for next session
 

@@ -1,6 +1,8 @@
 # Forward Factor Backtester — Research Summary
 
-> Self-contained snapshot of the project as of **2026-05-02**. If you've never seen this codebase before (including a future Steven who's lost the context), start here. For full state details see `CLAUDE_CODE_HANDOFF.md`.
+> Self-contained snapshot of the project as of **2026-05-03** (updated post-2024-attribution + Path 1 sensitivity). If you've never seen this codebase before (including a future Steven who's lost the context), start here. For full state details see `CLAUDE_CODE_HANDOFF.md`.
+
+> **Status**: research arc PROVISIONALLY complete. The core findings are stable, but the allocation answer is now bracketed (optimistic / realistic / forward-looking) pending two validations: (a) ORATS extended-history backtest covering 2008/2018/2020, and (b) debit-floor cap re-test on the 23-ticker universe. Initial deployment recommendation: **5-10% live + 15% paper trade as Phase A**, with full sizing decision deferred until ORATS lands (~10-14 days ETA).
 
 ## The strategy in one paragraph
 
@@ -23,9 +25,11 @@ The **Forward Factor (FF)** is a vol term-structure metric from the Volatility V
 
 The 26.68% MaxDD is **above the README's ≤25% allocation criterion by 1.68pp**. As a standalone allocation, FF Tier 1 narrowly fails 2 of Steven's 5 stated criteria (worst-cell Sharpe and MaxDD). But standalone-only is the wrong test for THIS strategy — the right framing is the diversified mix, where the negative correlation does heavy lifting.
 
-### Allocation answer vs Steven's TQQQ Vol-Target
+### Allocation answer vs Steven's TQQQ Vol-Target (BRACKETED)
 
-Daily-returns correlation between FF Tier 1 and TQQQ-VT: **−0.107**. Beta: **−0.200**. Their drawdowns happen at different times, so combining them produces a smoother equity curve.
+Daily-returns correlation between FF Tier 1 and TQQQ-VT: **−0.107** (canonical) / **−0.115** (without IWM Jul 2024 outlier). Beta: −0.200 / −0.215. Their drawdowns happen at different times — diversification benefit is structural, not driven by any single trade.
+
+**Optimistic case** (canonical, includes IWM Jul 2024 outlier worth +$304,868):
 
 | Mix (TQQQ-VT/FF) | CAGR | MaxDD% | Sharpe | Calmar |
 |---|---:|---:|---:|---:|
@@ -34,14 +38,19 @@ Daily-returns correlation between FF Tier 1 and TQQQ-VT: **−0.107**. Beta: **�
 | **50/50 — max-Calmar** | **+35.08%** | **16.40%** | 1.17 | **2.14** |
 | 0/100 (pure FF) | +32.78% | 26.68% | 0.79 | 1.23 |
 
-**The 70/30 max-Sharpe mix improves both CAGR AND MaxDD vs pure TQQQ-VT** — textbook diversification result, possible only because of the negative correlation. Concrete deltas vs Steven's current pure TQQQ-VT:
+**Realistic case** (without IWM Jul 2024 — sensitivity per Path 1 analysis):
 
-- CAGR: **+7.85pp** (24.46% → 32.31%)
-- MaxDD%: **−10.30pp** (31.43% → 21.13%)
-- Sharpe: **+0.36** (0.90 → 1.26)
-- Calmar: **+0.75** (0.78 → 1.53)
+| Mix | CAGR | MaxDD% | Sharpe |
+|---|---:|---:|---:|
+| 100/0 (pure TQQQ-VT) | +24.46% | 31.43% | 0.90 |
+| **70/30 — max-Sharpe (unchanged mix)** | **+30.19%** | **21.13%** | **1.20** |
+| 0/100 (pure FF) | +25.22% | 31.95% | 0.69 |
 
-In dollars: $200K deployed 70/30 over the 4.3-year period would have ended at ~$704K vs ~$525K pure TQQQ-VT (+$179K) **with lower drawdown along the way**. The 30% FF allocation falls in Steven's "meaningful allocation" bucket (>15%), not satellite.
+**Forward-looking case**: TBD pending ORATS extended-history backtest.
+
+**Key finding from Path 1 sensitivity**: max-Sharpe mix stays at 70/30 in BOTH optimistic and realistic cases — the strategy is structurally diversifying, the IWM trade was bonus not foundation. CAGR uplift vs pure TQQQ-VT shrinks from +7.85pp (optimistic) to +5.73pp (realistic); Sharpe uplift from +0.36 to +0.30. Both still meaningfully improve the portfolio over pure TQQQ-VT.
+
+**Why the brackets**: 2024 attribution analysis revealed top 5 trades = 85.4% of 2024 P&L; the IWM Jul 2024 trade alone = 22.4% of the entire 4.3-year strategy P&L. The same near-zero-debit Kelly-overscale pattern produced both this winner AND the KRE Apr 2026 catastrophe (−$258K). Symmetric upside/downside; structural property of Kelly sizing on near-zero-debit calendars. Forward expected return depends critically on whether this pattern produces outliers consistently across regimes (ORATS extended history will tell us).
 
 ## What we tried that didn't work
 
@@ -103,4 +112,4 @@ Items explicitly **NOT** to pursue without specific new evidence: Tier 2 (all 6 
 
 ## TL;DR for someone reading in 6 months
 
-> FF is a real, negatively-correlated diversifier vs Steven's TQQQ-VT. Standalone +32.78% CAGR with 26.68% DD; mixed 70/30 with TQQQ-VT delivers +32.31% CAGR with 21.13% DD and Sharpe 1.26. The structural lever was multi-asset universe expansion, not risk caps or vol-targeting (both tested and rejected). Deployment path is Phase A small-stake-live + paper for 6 months, then scale to 70/30 if live matches backtest. Don't run more cell expansion or signal-quality sizing — they'd overfit a 4.3-year sample. The next productive work is live-vs-backtest diary if deployed, or OQuants ex-earnings IV implementation if you want to unlock single-name exposure (currently 100% earnings-blocked at 60/90 DTE).
+> FF is a real, negatively-correlated diversifier vs Steven's TQQQ-VT. Standalone +32.78% CAGR with 26.68% DD on 4.3-year backtest; mixed 70/30 with TQQQ-VT delivers +32.31% CAGR with 21.13% DD and Sharpe 1.26 (optimistic case). BUT — the IWM Jul 2024 single trade is 22.4% of total P&L. Without it, FF standalone is +25.22% CAGR / 31.95% DD; the 70/30 mix still wins (Sharpe 1.20, CAGR +30.19%) — strategy is structurally diversifying, but the near-zero-debit Kelly-overscale pattern that produced this winner is the SAME pattern that caused the KRE Apr 2026 −$258K catastrophe. Forward expected returns are bracketed pending ORATS extended-history validation across 2008/2018/2020 regimes. Initial deployment is **5-10% live + 15% paper as Phase A**, full sizing decision deferred until ORATS lands. The structural lever that delivered the result was multi-asset universe expansion (not risk caps or vol-targeting, both tested and rejected). Don't run more cell expansion or signal-quality sizing — they'd overfit a 4.3-year sample.
