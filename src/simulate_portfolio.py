@@ -369,6 +369,54 @@ def simulate(candidates_path: str | Path, cfg: RunConfig, output_dir: str | Path
                     state["cap_triggers"].get(breakdown["binding_cap"], 0) + 1
                 if contracts < 1:
                     continue
+
+                # ===== Cross-cell caps (Phase 5 stable-version) =====
+                # Per-ticker NAV cap: sum of debit_total across all open positions
+                # for this ticker (across all cells), capped at strategy NAV * pct.
+                # NAV scope = combined initial (FIXED), matching per-cell-initial choice.
+                debit_mid = float(candidate["estimated_debit"])
+                strategy_nav_initial = cfg.initial_capital_per_cell * len(cell_names)
+                per_spread_cost = debit_mid * 100.0
+                cross_cap_binding = None
+
+                if not cap_disabled(cfg.position_cap_per_ticker_nav_pct) and per_spread_cost > 0:
+                    ticker_open_debit = sum(
+                        p.debit_total
+                        for cn2 in cell_names for p in cell_state[cn2]["positions"]
+                        if p.ticker == candidate["ticker"]
+                    )
+                    cap_dollars = strategy_nav_initial * cfg.position_cap_per_ticker_nav_pct
+                    remaining = cap_dollars - ticker_open_debit
+                    cap_ticker = max(0, int(remaining // per_spread_cost))
+                    if cap_ticker < contracts:
+                        contracts = cap_ticker
+                        cross_cap_binding = "cap_per_ticker_nav"
+
+                if cfg.asset_class_caps and cfg.asset_class_map and per_spread_cost > 0:
+                    cls = cfg.asset_class_map.get(candidate["ticker"])
+                    cap_pct = cfg.asset_class_caps.get(cls) if cls else None
+                    if cap_pct is not None:
+                        cls_open_debit = sum(
+                            p.debit_total
+                            for cn2 in cell_names for p in cell_state[cn2]["positions"]
+                            if cfg.asset_class_map.get(p.ticker) == cls
+                        )
+                        cap_dollars = strategy_nav_initial * cap_pct
+                        remaining = cap_dollars - cls_open_debit
+                        cap_class = max(0, int(remaining // per_spread_cost))
+                        if cap_class < contracts:
+                            contracts = cap_class
+                            cross_cap_binding = "cap_asset_class"
+
+                if cross_cap_binding is not None:
+                    # Update binding_cap if a cross-cell cap won
+                    breakdown["binding_cap"] = cross_cap_binding
+                    state["cap_triggers"][cross_cap_binding] = \
+                        state["cap_triggers"].get(cross_cap_binding, 0) + 1
+
+                if contracts < 1:
+                    continue
+
                 # Open: slipped debit
                 debit_slipped = float(candidate["estimated_debit"]) * (1.0 + cfg.slippage_pct)
                 debit_total = debit_slipped * contracts * 100

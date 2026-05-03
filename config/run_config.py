@@ -53,6 +53,16 @@ class RunConfig:
     position_cap_strike_mtm: Optional[float] = 0.02
     strike_width_floor: float = 2.50
 
+    # === Cross-cell caps (Phase 5 stable-version; combined-strategy NAV scope) ===
+    # NAV used in these caps = initial_capital_per_cell × len(cells), FIXED.
+    # Position cap per ticker = sum of debit_total across ALL open positions
+    # (across all cells) for that ticker, capped at this fraction of strategy NAV.
+    # Asset-class caps work the same way but aggregate by class via asset_class_map.
+    # Both default to None (disabled); stable-version config sets them.
+    position_cap_per_ticker_nav_pct: Optional[float] = None
+    asset_class_caps: Optional[dict] = None       # {class_name: pct_of_NAV}
+    asset_class_map: Optional[dict] = None        # {ticker: class_name}
+
     # === Execution ===
     slippage_pct: float = 0.05
     commission_per_contract: float = 0.65
@@ -92,6 +102,11 @@ class RunConfig:
         d["universe"] = sorted(self.universe)
         if isinstance(self.ff_threshold, dict):
             d["ff_threshold"] = dict(sorted(self.ff_threshold.items()))
+        # Sort the new optional dicts so hashing is stable
+        if isinstance(self.asset_class_caps, dict):
+            d["asset_class_caps"] = dict(sorted(self.asset_class_caps.items()))
+        if isinstance(self.asset_class_map, dict):
+            d["asset_class_map"] = dict(sorted(self.asset_class_map.items()))
         return d
 
     def to_json(self) -> str:
