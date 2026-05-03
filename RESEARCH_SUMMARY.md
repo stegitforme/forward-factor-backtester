@@ -1,56 +1,45 @@
 # Forward Factor Backtester — Research Summary
 
-> Self-contained snapshot of the project as of **2026-05-03** (updated post-2024-attribution + Path 1 sensitivity). If you've never seen this codebase before (including a future Steven who's lost the context), start here. For full state details see `CLAUDE_CODE_HANDOFF.md`.
+> Self-contained snapshot of the project as of **2026-05-03 (end of day, post Phase 5 stable-version)**. If you've never seen this codebase before (including a future Steven who's lost the context), start here. For full state details see `CLAUDE_CODE_HANDOFF.md`.
 
-> **Status**: research arc PROVISIONALLY complete. The core findings are stable, but the allocation answer is now bracketed (optimistic / realistic / forward-looking) pending two validations: (a) ORATS extended-history backtest covering 2008/2018/2020, and (b) debit-floor cap re-test on the 23-ticker universe. Initial deployment recommendation: **5-10% live + 15% paper trade as Phase A**, with full sizing decision deferred until ORATS lands (~10-14 days ETA).
+> **Status**: NOT decision-ready, NOT research-arc-closed. Phase 5 stable-version revealed the strategy has two distinct alpha modes — unconstrained Tier 1 (+32.78% CAGR, edge driven by near-zero-debit Kelly-overscale lottery-ticket trades) and stable-with-caps (+6.48% CAGR, lottery-ticket pattern neutralized). Three viable interpretations now exist (conservative, aggressive, no-allocation-pending-validation); none is "the canonical answer." **Deployment via Phase A: 5% live STABLE + 10% paper STABLE + Tier 1 journal-only at 5% notional.** Full sizing decision gated on ORATS extended-history results (~10-14 days ETA) per the Phase B decision tree in `CLAUDE_CODE_HANDOFF.md`.
 
 ## The strategy in one paragraph
 
 The **Forward Factor (FF)** is a vol term-structure metric from the Volatility Vibes YouTube channel, validated against Campasano's 2018 SSRN paper "Term Structure Forecasts of Volatility." When front-month implied volatility is materially higher than the forward-implied vol between front and back month (FF ≥ 0.20), VV's thesis is that long-calendar spreads (sell front, buy back) capture systematic mispricing as the front leg's elevated IV decays faster than the back. We built an independent backtest of this on Polygon Options Advanced data covering 2022-01-03 → 2026-04-30 (~1,129 trading days). After 4+ phases of research (sparsity findings, single-cell rejection, exit-pricing fix, earnings disambiguation, multi-window stress tests, position-cap and vol-targeting experiments, universe expansion), the canonical configuration is a **2-cell ATM call calendar (30-90 + 60-90 DTE) on a 23-ticker multi-asset universe with hardcoded earnings filter active**. The strategy delivers a **+32.78% standalone CAGR** with **26.68% MaxDD** and **0.77 Sharpe** over the 4.3-year backtest, with **−0.107 daily-returns correlation to Steven's existing TQQQ Vol-Target system** — making it a genuine portfolio diversifier, not just expensive equity-vol exposure in a different costume.
 
-## The headline result
+## The headline result — two configs, three interpretations
 
-### Standalone FF Tier 1
+The strategy has **two distinct alpha modes** depending on how it's sized. Phase 5 (2026-05-03) added structural caps to the canonical config and revealed that the unconstrained engine's edge IS the near-zero-debit Kelly-overscale lottery-ticket pattern — strip that pattern via caps and the strategy yields +6.48% CAGR. That's not "the strategy plus an outlier"; the lottery-ticket pattern is the primary alpha generator.
 
-| Metric | Value |
-|---|---:|
-| MTM CAGR | **+32.78%** |
-| MaxDD% (PCT-max) | **26.68%** (Nov 2023 → Feb 2024 episode, 88 days, recovered) |
-| Annualized vol | 53.35% |
-| Sharpe | 0.77 |
-| Calmar | 1.23 |
-| Closed trades | 643 |
-| Still open at end | 24 |
-| End equity | $1,362,520 (on $400K base) |
+### Standalone metrics (both configs, full sample 2022-01-03 → 2026-04-30)
 
-The 26.68% MaxDD is **above the README's ≤25% allocation criterion by 1.68pp**. As a standalone allocation, FF Tier 1 narrowly fails 2 of Steven's 5 stated criteria (worst-cell Sharpe and MaxDD). But standalone-only is the wrong test for THIS strategy — the right framing is the diversified mix, where the negative correlation does heavy lifting.
+| Metric | Tier 1 unconstrained | Stable-version (capped) |
+|---|---:|---:|
+| MTM CAGR | **+32.78%** | **+6.48%** |
+| MaxDD% (PCT-max) | 26.68% | **8.66%** |
+| Annualized vol | 53.35% | **11.10%** |
+| Sharpe | 0.77 | 0.61 |
+| Calmar | 1.23 | 0.75 |
+| Closed trades | 643 | 643 |
+| End equity | $1,362,520 | $524,653 (on $400K base) |
+| Concentration tests passed | (failed top-5 ticker, top-5 trades) | **6 of 7** |
 
-### Allocation answer vs Steven's TQQQ Vol-Target (BRACKETED)
+Stable config (`e3fa28f120d1`): half-Kelly (2% per-trade) + debit-floor $0.15 + 12% per-ticker NAV cap + asset-class caps (equity_etf 50% / single_name 20% / commodity 20% / bond 15% / international 15% / vol 10%). All other parameters identical to Tier 1.
 
-Daily-returns correlation between FF Tier 1 and TQQQ-VT: **−0.107** (canonical) / **−0.115** (without IWM Jul 2024 outlier). Beta: −0.200 / −0.215. Their drawdowns happen at different times — diversification benefit is structural, not driven by any single trade.
+### Three viable interpretations vs Steven's TQQQ Vol-Target
 
-**Optimistic case** (canonical, includes IWM Jul 2024 outlier worth +$304,868):
+Daily-returns correlation: **−0.107** (Tier 1) / **−0.140** (stable). Both negative — diversification benefit is structural across both configs.
 
-| Mix (TQQQ-VT/FF) | CAGR | MaxDD% | Sharpe | Calmar |
-|---|---:|---:|---:|---:|
-| 100/0 (Steven's current) | +24.46% | 31.43% | 0.90 | 0.78 |
-| **70/30 — max-Sharpe** | **+32.31%** | **21.13%** | **1.26** | 1.53 |
-| **50/50 — max-Calmar** | **+35.08%** | **16.40%** | 1.17 | **2.14** |
-| 0/100 (pure FF) | +32.78% | 26.68% | 0.79 | 1.23 |
+| Interpretation | Config | Mix | CAGR | MaxDD% | Sharpe | Read |
+|---|---|---|---:|---:|---:|---|
+| **Conservative** | stable-version | 50/50 max-Sharpe | **+16.66%** | **16.71%** | **1.12** | Improves portfolio Sharpe (+0.22 vs pure TQQQ-VT) and halves DD; lower CAGR. Deployable today. |
+| **Aggressive** | Tier 1 unconstrained | 70/30 max-Sharpe | **+32.31%** | **21.13%** | **1.26** | Best Sharpe AND CAGR uplift, but accepts that the strategy's edge depends on a pattern that produced both biggest win (IWM Jul 2024 +$305K) AND biggest loss (KRE Apr 2026 −$258K). Symmetric lottery-ticket on both sides. |
+| **No allocation pending validation** | — | (paper-trade only) | — | — | — | Defer until ORATS extended history (2008/2018/2020) confirms whether the lottery-ticket pattern persists across regimes. |
 
-**Realistic case** (without IWM Jul 2024 — sensitivity per Path 1 analysis):
+All three are honest reads of the same data. The "70/30 max-Sharpe is canonical" framing from earlier in the day was incomplete — it didn't account for the fact that the unconstrained engine's edge is structurally lottery-ticket-shaped on both sides. Phase 5 made that visible by stripping the pattern out and showing what's left.
 
-| Mix | CAGR | MaxDD% | Sharpe |
-|---|---:|---:|---:|
-| 100/0 (pure TQQQ-VT) | +24.46% | 31.43% | 0.90 |
-| **70/30 — max-Sharpe (unchanged mix)** | **+30.19%** | **21.13%** | **1.20** |
-| 0/100 (pure FF) | +25.22% | 31.95% | 0.69 |
-
-**Forward-looking case**: TBD pending ORATS extended-history backtest.
-
-**Key finding from Path 1 sensitivity**: max-Sharpe mix stays at 70/30 in BOTH optimistic and realistic cases — the strategy is structurally diversifying, the IWM trade was bonus not foundation. CAGR uplift vs pure TQQQ-VT shrinks from +7.85pp (optimistic) to +5.73pp (realistic); Sharpe uplift from +0.36 to +0.30. Both still meaningfully improve the portfolio over pure TQQQ-VT.
-
-**Why the brackets**: 2024 attribution analysis revealed top 5 trades = 85.4% of 2024 P&L; the IWM Jul 2024 trade alone = 22.4% of the entire 4.3-year strategy P&L. The same near-zero-debit Kelly-overscale pattern produced both this winner AND the KRE Apr 2026 catastrophe (−$258K). Symmetric upside/downside; structural property of Kelly sizing on near-zero-debit calendars. Forward expected return depends critically on whether this pattern produces outliers consistently across regimes (ORATS extended history will tell us).
+**Why no single canonical answer**: pre-Phase 5, the question was "how big do we deploy the canonical mix?" Post-Phase 5, the question is "which configuration do we trust enough to size into?" That's a fork in the road, not a magnitude calibration. ORATS extended history is the only data that can adjudicate.
 
 ## What we tried that didn't work
 
@@ -80,25 +69,47 @@ Three risk-control hypotheses tested rigorously and rejected. All infrastructure
 
 ## Deployment path
 
-Steven's recommended phased approach to live capital — **NOT** immediate 30% deployment based on backtest alone.
+Three-phase plan that deploys via the stable-version while preserving optionality on the aggressive interpretation.
 
-**Phase A — Live + paper validation (months 1-6).** Allocate **5-10% of liquid NW** to live FF Tier 1 (small-stake, real fills) and run **25% of liquid NW as a paper-trade** of FF Tier 1 alongside (no capital at risk; just track live-execution behavior). Compare live + paper P&L to backtest expectations weekly. Watch fallback-warning frequency, fill quality vs slippage assumption, earnings-blocking accuracy on hardcoded calendar. If 6-month live + paper match backtest within ±5pp annualized, proceed to Phase B.
+**Phase A — Now, before ORATS (~10-14 days). Stable deployment + Tier 1 journal.**
+- **5% of liquid NW live to STABLE-version config** (`e3fa28f120d1`). Caps neutralize the lottery-ticket pattern, so live execution risk is bounded even if the unconstrained pattern was 2022-2026-lucky.
+- **10% of liquid NW as paper-trade of STABLE-version config** in parallel. Tracks real-world execution gaps (slippage, fills, fallback-warning rate) on the deployable variant.
+- **Tier 1 unconstrained tracked at 5% notional as journal-only entries** (no real money). Pure-comparison ledger so we can adjudicate stable-vs-aggressive on live data, not just backtest.
 
-**Phase B — Scale to max-Sharpe allocation (months 7-12).** If Phase A clears, scale to the canonical **30% FF / 70% TQQQ-VT** max-Sharpe mix. Implement daily-rebalanced fixed-weight overlay (or quarterly rebalance if daily friction is too high — re-test backtest at quarterly to confirm degradation is small). Continue live monitoring; track Sharpe + MaxDD vs backtest expectations.
+This validates execution on the deployable version while preserving optionality. Watch for: fallback-warning frequency vs 3.7% backtest rate; actual fill quality vs 5% slippage; earnings-blocking accuracy; any near-zero-debit (entry < $0.15) trade in the journal-only Tier 1 ledger — those are the structural alpha events; track outcomes.
 
-**Phase C — Re-evaluate (month 12+).** 12 months of live data is enough to start updating priors meaningfully. If live Sharpe ≥ backtest Sharpe − 0.20 AND MaxDD ≤ backtest MaxDD + 5pp, strategy is performing in expectation — consider 50/50 max-Calmar mix. If live drifts materially worse, reduce allocation but don't eliminate; the −0.107 correlation makes even reduced FF a net portfolio improver.
+**Phase B — After ORATS lands (decision tree). Full sizing decision.**
 
-## Open follow-ups queued
+| ORATS finding | Action |
+|---|---|
+| Stable-version 2008-2021 CAGR > 8% consistently | Caps preserve real edge across regimes — scale STABLE to 15-20% live |
+| Stable-version 2008-2021 CAGR < 5% | Strategy is too weak even with caps — paper-only |
+| Unconstrained 2008-2021 reveals more IWM/KRE-style outliers | Lottery-ticket pattern is structural — fundamentally rethink; explore vega-targeted sizing variant |
+| Unconstrained 2008-2021 CAGR > 25% with no major blowups | The 4.3-year sample understated the strategy — reconsider unconstrained at 15-20% with active monitoring |
 
-Productive next steps if the strategy is deployed and Steven wants to refine. None block the allocation decision.
+**Phase C — Re-evaluate after Phase B has 12 months of live data.** If live performance is in expectation (Sharpe ≥ Phase-B-target − 0.20, MaxDD ≤ Phase-B-target + 5pp), consider scaling within the chosen interpretation. If live drifts worse, reduce but don't eliminate — the negative correlation makes even reduced FF a net portfolio improver.
 
-1. **Extend backtest to May 2021** — Polygon's 5-year cap allows ~7 more months of pre-2022 data. Adds the 2021 low-vol regime. ~1 hour compute.
-2. **2024 per-quarter / per-ticker attribution** — was the +87% CAGR broad-based or concentrated? ~30 min analysis on existing trade log.
-3. **OQuants ex-earnings IV implementation (Option A)** — would unlock single-name signal (META/AMD/GOOGL/JPM/COIN/MSTR currently produce zero opens). 6-10 hour build per OQuants methodology. Only worth doing if you specifically want single-name exposure.
-4. **Live execution diary** — once Phase A starts, track every live trade vs backtest's predicted entry, fill price, exit pricing. Surfaces real-vs-backtest gaps that don't show up in pre-trade analysis.
-5. **Verbatim VV transcript quotes** — Steven to paste into Spec Sources section of `CLAUDE_CODE_HANDOFF.md` when convenient. Doesn't block anything; makes the spec record auditable.
+## Open follow-ups
 
-Items explicitly **NOT** to pursue without specific new evidence: Tier 2 (all 6 cells), Tier 3 (signal-quality weighted sizing — overfit risk on 4.3-year sample), more universe expansion (the 5-of-26 pre-flight pass rate showed marginal new tickers don't produce signal at this DTE pair).
+### BLOCKING the Phase B sizing decision
+
+1. **ORATS extended-history backtest** (~10-14 days ETA, data acquisition pending). Re-run BOTH Tier 1 unconstrained AND Phase 5 stable on 2008/2018/2020 ORATS data. Two questions: does the unconstrained near-zero-debit pattern repeat outside 2022-2026, and does stable-version's +6.48% CAGR survive in older regimes? Both answers feed the Phase B decision tree.
+2. **Debit-floor cap re-evaluation on 23-ticker universe** — Cap 2 was rejected on 17-ticker universe; 23-ticker math may differ. ~30 min once ORATS lands.
+
+### Queued — for AFTER ORATS
+
+3. **Vega-targeted sizing variant** — instead of contracts × debit Kelly, size each trade so a 1× vol move produces max P&L change of 0.5% of NAV. Different lever for the near-zero-debit pattern: caps risk per trade (insensitive to debit collapse) rather than cost per trade. Build cost ~3-5 hours; runs on existing candidate data. Don't run before ORATS — its value depends on whether the lottery-ticket pattern repeats. If yes, vega-sizing is the natural next experiment; if no, stable-version is sufficient.
+
+### Productive when convenient (not blocking)
+
+4. **Extend backtest to May 2021** — Polygon's 5-year cap allows ~7 more months of pre-2022 data. ~1 hour compute.
+5. **OQuants ex-earnings IV implementation (Option A)** — unlocks single-name signal (5 single names in universe currently produce ~zero opens because earnings filter blocks 97-100% of their days at 60/90 DTE). 6-10 hour build. Only worth doing if Steven wants single-name exposure specifically.
+6. **Live execution diary** — once Phase A starts, track every live trade and journal entry vs backtest's predicted entry, fill price, exit pricing. Stable-vs-aggressive comparison lives in the same spreadsheet.
+7. **Verbatim VV transcript quotes** — Steven to paste into Spec Sources section of `CLAUDE_CODE_HANDOFF.md` when convenient.
+
+### Items explicitly parked (do NOT pursue without new evidence)
+
+Tier 2 (all 6 cells), Tier 3 (signal-quality weighted sizing — overfit risk on 4.3-year sample), more universe expansion, per-cell FF threshold calibration, per-trade caps in isolation, vol-targeting overlay. All tested or evaluated and either rejected or shown to add complexity without commensurate edge.
 
 ## Where to find things
 
@@ -112,4 +123,4 @@ Items explicitly **NOT** to pursue without specific new evidence: Tier 2 (all 6 
 
 ## TL;DR for someone reading in 6 months
 
-> FF is a real, negatively-correlated diversifier vs Steven's TQQQ-VT. Standalone +32.78% CAGR with 26.68% DD on 4.3-year backtest; mixed 70/30 with TQQQ-VT delivers +32.31% CAGR with 21.13% DD and Sharpe 1.26 (optimistic case). BUT — the IWM Jul 2024 single trade is 22.4% of total P&L. Without it, FF standalone is +25.22% CAGR / 31.95% DD; the 70/30 mix still wins (Sharpe 1.20, CAGR +30.19%) — strategy is structurally diversifying, but the near-zero-debit Kelly-overscale pattern that produced this winner is the SAME pattern that caused the KRE Apr 2026 −$258K catastrophe. Forward expected returns are bracketed pending ORATS extended-history validation across 2008/2018/2020 regimes. Initial deployment is **5-10% live + 15% paper as Phase A**, full sizing decision deferred until ORATS lands. The structural lever that delivered the result was multi-asset universe expansion (not risk caps or vol-targeting, both tested and rejected). Don't run more cell expansion or signal-quality sizing — they'd overfit a 4.3-year sample.
+> FF has two distinct alpha modes. **Unconstrained Tier 1**: +32.78% CAGR / 26.68% DD standalone, +32.31% / 21.13% / Sharpe 1.26 in 70/30 mix with TQQQ-VT. The edge comes from a near-zero-debit Kelly-overscale lottery-ticket pattern that produced both biggest win (IWM Jul 2024 +$305K, 22.4% of total P&L) AND biggest loss (KRE Apr 2026 −$258K). **Stable-version with structural caps**: +6.48% CAGR / 8.66% DD standalone, +16.66% / 16.71% / Sharpe 1.12 in 50/50 mix. Caps strip the lottery-ticket pattern and reveal what's left underneath. Three viable interpretations now exist (conservative stable, aggressive unconstrained, no-allocation-pending-validation); none is "the canonical answer." Deployment via Phase A: **5% live STABLE + 10% paper STABLE + Tier 1 journal-only at 5% notional**. Full sizing decision gated on ORATS extended-history results (~10-14 days) per Phase B decision tree. Multi-asset universe expansion (Phase 4) was the structural lever that delivered the result; risk caps and vol-targeting in isolation were tested and rejected. Vega-targeted sizing is queued for after ORATS as the next experiment IF the lottery-ticket pattern is shown to repeat. Do not treat this as decision-ready or research-arc-closed — it's a deployable starting position with a clear gate to the full-sizing decision.
