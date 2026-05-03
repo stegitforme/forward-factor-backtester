@@ -102,27 +102,40 @@ class EarningsFilter:
         return cal
 
     def _fetch_events(self, ticker: str) -> list[EarningsEvent]:
+        """Resolve earnings events for a ticker.
+
+        Priority:
+          1. Hardcoded calendar in src/earnings_data.py — covers our backtest
+             universe, including explicit empty lists for ETFs (no earnings).
+          2. Polygon /v1/reference/tickers (currently broken on our tier;
+             retained as future-proof fallback when tier changes).
+          3. Empty list (no filter applied) with debug log.
+
+        Returns events as EarningsEvent objects; timing defaults to 'unknown'
+        because the hardcoded source doesn't track BMO/AMC.
         """
-        Fetch earnings events from Polygon. The exact endpoint may evolve;
-        if Polygon doesn't return earnings for this tier, fall back to a
-        permissive policy (no filter) and log a warning.
-        """
+        from src.earnings_data import get_earnings_dates
+
+        hardcoded = get_earnings_dates(ticker)
+        if hardcoded is not None:  # explicit hit (including [] for ETFs)
+            return [
+                EarningsEvent(ticker=ticker, event_date=d, timing="unknown")
+                for d in hardcoded
+            ]
+
+        # Fallback: Polygon (returns nothing on Options Advanced tier today)
         try:
-            # Polygon's reference endpoint for ticker events
-            # https://polygon.io/docs/stocks/get_v1_reference_tickers__ticker
             data = self.polygon_client._get(
                 f"/v1/reference/tickers/{ticker}",
                 ttl_seconds=settings.CACHE_TTL_REFERENCE,
             )
         except Exception as e:
-            # The Polygon /v1/reference/tickers endpoint doesn't return
-            # earnings on our tier. Without a working source, we run with
-            # an empty calendar (no events block trades). This is logged
-            # at debug level to avoid spam — it fires for every ticker.
-            log.debug("Earnings fetch failed for %s: %s — using empty calendar", ticker, e)
+            log.debug(
+                "No earnings for %s in hardcoded calendar; Polygon fetch failed (%s) — using empty calendar",
+                ticker, e,
+            )
             return []
 
-        # Parse — exact schema TBD; this is a defensive parse
         events: list[EarningsEvent] = []
         ticker_data = data.get("results", {}) if isinstance(data, dict) else {}
         raw_events = ticker_data.get("events") or []
@@ -138,11 +151,13 @@ class EarningsFilter:
                 continue
             timing = ev.get("timing", "unknown")
             events.append(EarningsEvent(
-                ticker=ticker,
-                event_date=ev_date,
-                timing=timing,
+                ticker=ticker, event_date=ev_date, timing=timing,
             ))
-
+        if not events:
+            log.debug(
+                "No earnings for %s in hardcoded calendar AND Polygon returned 0 — using empty calendar",
+                ticker,
+            )
         return events
 
     def is_safe_window(

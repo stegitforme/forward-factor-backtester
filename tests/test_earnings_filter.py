@@ -111,7 +111,13 @@ class TestEarningsCalendar:
 
 
 class TestEarningsFilter:
-    """Test the filter class with a mock polygon client."""
+    """Test the filter class with a mock polygon client.
+
+    Uses 'FAKE' ticker so tests exercise the polygon-fetch fallback path
+    rather than short-circuiting to the hardcoded calendar in
+    src/earnings_data.py (which now covers AAPL and other major names)."""
+
+    TICKER = "FAKE"  # not in hardcoded calendar — falls through to polygon mock
 
     def _make_client_with_events(self, events_data):
         """events_data: list of {date, timing} dicts."""
@@ -129,30 +135,30 @@ class TestEarningsFilter:
     def test_safe_window_with_no_earnings(self):
         client = self._make_client_with_events([])
         f = EarningsFilter(client, buffer_days=4)
-        assert f.is_safe_window("AAPL", date(2026, 5, 1), date(2026, 6, 1)) is True
+        assert f.is_safe_window(self.TICKER, date(2026, 5, 1), date(2026, 6, 1)) is True
 
     def test_unsafe_window_with_earnings_inside(self):
         client = self._make_client_with_events([{"date": "2026-05-15"}])
         f = EarningsFilter(client, buffer_days=4)
-        assert f.is_safe_window("AAPL", date(2026, 5, 1), date(2026, 6, 1)) is False
+        assert f.is_safe_window(self.TICKER, date(2026, 5, 1), date(2026, 6, 1)) is False
 
     def test_safe_window_with_earnings_well_outside(self):
         client = self._make_client_with_events([{"date": "2026-09-01"}])
         f = EarningsFilter(client, buffer_days=4)
-        assert f.is_safe_window("AAPL", date(2026, 5, 1), date(2026, 6, 1)) is True
+        assert f.is_safe_window(self.TICKER, date(2026, 5, 1), date(2026, 6, 1)) is True
 
     def test_buffer_catches_near_misses(self):
         # Earnings 3 days before window start, buffer = 4 days -> should catch
         client = self._make_client_with_events([{"date": "2026-04-28"}])
         f = EarningsFilter(client, buffer_days=4)
-        assert f.is_safe_window("AAPL", date(2026, 5, 1), date(2026, 6, 1)) is False
+        assert f.is_safe_window(self.TICKER, date(2026, 5, 1), date(2026, 6, 1)) is False
 
     def test_calendar_is_cached(self):
         """Calendar fetched once, served from cache thereafter."""
         client = self._make_client_with_events([{"date": "2026-05-15"}])
         f = EarningsFilter(client, buffer_days=4)
-        f.is_safe_window("AAPL", date(2026, 5, 1), date(2026, 6, 1))
-        f.is_safe_window("AAPL", date(2026, 7, 1), date(2026, 8, 1))
+        f.is_safe_window(self.TICKER, date(2026, 5, 1), date(2026, 6, 1))
+        f.is_safe_window(self.TICKER, date(2026, 7, 1), date(2026, 8, 1))
         # Only one fetch should have happened (the second uses the cache)
         assert client._get.call_count == 1
 
@@ -162,7 +168,7 @@ class TestEarningsFilter:
         client._get.side_effect = Exception("API down")
         f = EarningsFilter(client, buffer_days=4)
         # Should not raise; should treat as safe (no events known)
-        result = f.is_safe_window("AAPL", date(2026, 5, 1), date(2026, 6, 1))
+        result = f.is_safe_window(self.TICKER, date(2026, 5, 1), date(2026, 6, 1))
         assert result is True
 
     def test_filter_trades_dataframe(self):
@@ -171,7 +177,7 @@ class TestEarningsFilter:
         f = EarningsFilter(client, buffer_days=4)
 
         trades = pd.DataFrame({
-            "ticker": ["AAPL", "AAPL", "AAPL"],
+            "ticker": [self.TICKER, self.TICKER, self.TICKER],
             "entry_date": [date(2026, 5, 1), date(2026, 6, 5), date(2026, 7, 1)],
             "back_expiry": [date(2026, 6, 1), date(2026, 7, 5), date(2026, 8, 1)],
         })
@@ -182,6 +188,50 @@ class TestEarningsFilter:
         # Third trade is well after -> kept
         assert len(result) == 2
         assert result.iloc[0]["entry_date"] == date(2026, 6, 5)
+
+
+class TestHardcodedEarningsCalendar:
+    """Tests that exercise the new hardcoded earnings calendar source."""
+
+    def test_etf_returns_empty_explicitly(self):
+        """ETFs in ETF_TICKERS_NO_EARNINGS get an empty list — no events,
+        so any window is safe regardless of dates."""
+        from src.earnings_data import get_earnings_dates
+        assert get_earnings_dates("SPY") == []
+        assert get_earnings_dates("QQQ") == []
+        assert get_earnings_dates("XBI") == []
+
+    def test_unknown_ticker_returns_none(self):
+        """Tickers not in either set return None — caller falls back to polygon."""
+        from src.earnings_data import get_earnings_dates
+        assert get_earnings_dates("FAKE") is None
+        assert get_earnings_dates("ZZZZ") is None
+
+    def test_mstr_q3_2024_verified_date(self):
+        """MSTR Q3 2024 earnings (2024-10-30) is the one verified date —
+        confirmed during the Oct 2024 drill. This test acts as a regression
+        guard if the calendar is ever edited."""
+        from src.earnings_data import get_earnings_dates
+        dates = get_earnings_dates("MSTR")
+        assert date(2024, 10, 30) in dates
+
+    def test_filter_blocks_mstr_sep_18_trade(self):
+        """End-to-end: MSTR Sep 18 2024 entry with Nov 15 front_expiry
+        spans the Oct 30 earnings. Filter must block it."""
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        f = EarningsFilter(client, buffer_days=4)
+        # Front expiry is what step_one_day passes as window_end (back_expiry actually)
+        # Either way, 2024-10-30 is in [2024-09-18, 2024-12-20] → block
+        safe = f.is_safe_window("MSTR", date(2024, 9, 18), date(2024, 12, 20))
+        assert safe is False
+
+    def test_filter_allows_etf_unconditionally(self):
+        """SPY has no earnings — filter is always permissive."""
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        f = EarningsFilter(client, buffer_days=4)
+        assert f.is_safe_window("SPY", date(2024, 9, 18), date(2024, 12, 20)) is True
 
 
 if __name__ == "__main__":

@@ -23,9 +23,18 @@ backwardation, near-term vol is elevated relative to what the market
 implies for the forward window. The author's strategy enters long
 calendar spreads when FF >= 0.20.
 
+Math verified against VV's distributed calculator.py (2026-05-02): formula
+sigma_fwd = sqrt((sigma2^2 * T2 - sigma1^2 * T1) / (T2 - T1)) with T = DTE/365
+and sigma = IV/100. VV's calculator.py does NOT include any earnings handling
+(no ex-earnings IV adjustment, no earnings filter) — it expects the user to
+clean the IV inputs before plugging in. Earnings filter is handled separately
+in src/earnings_filter.py.
+
 References:
 - Calculator: calculator.py from his YouTube video distribution
-- Worked example: 30-day IV = 45%, 60-day IV = 35% -> sigma_fwd = 20.66%, FF = 117%
+- Worked example: 30-day IV = 45%, 60-day IV = 35% -> sigma_fwd = 20.61%, FF = 118.3%
+  (the original docstring claim of 20.66 / 117 was a rounding artifact from
+   the video walkthrough, not the actual formula output)
 - Academic: Campasano (2018), "Term Structure Forecasts of Volatility"
   https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3240028
 """
@@ -89,12 +98,12 @@ def calculate_forward_factor(
         calculator and the typical broker UI display. The result internally
         stores decimal sigmas for downstream math.
 
-    Example (matches video walkthrough):
+    Example (matches VV calculator.py, math verified by hand):
         >>> r = calculate_forward_factor(30, 45.0, 60, 35.0)
         >>> round(r.forward_iv_pct, 2)
-        20.66
-        >>> round(r.forward_factor_pct, 1)
-        117.8
+        20.61
+        >>> round(r.forward_factor_pct, 2)
+        118.3
     """
     # Validation
     if dte_front < 0 or dte_back < 0:

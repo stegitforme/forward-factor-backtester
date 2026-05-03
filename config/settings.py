@@ -41,13 +41,30 @@ KELLY_FRACTION: float = 0.25         # Quarter Kelly per his recommendation
 
 # Per the video: "if FF >= 0.20 the setup is typically tradable"
 # We test sensitivity at 0.15, 0.20, 0.25, 0.30 in the robustness sweep.
-FF_THRESHOLD: float = 0.20
+#
+# FF_THRESHOLD can be either a single float (uniform across all cells) OR a
+# dict[cell_name, float] for per-cell calibration. VV's "Filtered" model uses
+# per-cell thresholds because the (T2-T1) denominator amplifies FF differently
+# for different DTE pairs (60-90 produces ~2x larger FF magnitudes than 30-90
+# for the same IV gap). Uniform threshold filters cells unequally on edge.
+#
+# To use per-cell: replace the float with e.g.
+#   FF_THRESHOLD: dict[str, float] = {"30_90_atm": 0.30, "60_90_atm": 0.15}
+# Cells not in the dict fall back to FF_THRESHOLD_DEFAULT (uniform legacy).
+FF_THRESHOLD: float | dict[str, float] = 0.20
+
+# Fallback when FF_THRESHOLD is a dict and a cell name isn't keyed in it
+FF_THRESHOLD_DEFAULT: float = 0.20
 
 # DTE buffer: video allows ±5 day tolerance around target
 DTE_BUFFER_DAYS: int = 5
 
-# Simplified to single cell per user decision: 60-90 ATM call calendar only
+# 2-cell config (Phase 2a, 2026-05-02): added 30-90 alongside 60-90 to test
+# whether the apparent sparsity at 60-90 is a slow-cell artifact (per VV's own
+# data, 30-90 Call fires ~36x more often than 60-90 Call). 60-90 retained for
+# direct comparison with prior single-cell results.
 DTE_PAIRS: list[tuple[int, int]] = [
+    (30, 90),
     (60, 90),
 ]
 

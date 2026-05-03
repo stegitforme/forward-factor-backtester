@@ -11,6 +11,16 @@ data_cache/
 *.feather
 *.h5
 
+# Scratch / drill / sweep / diagnostic artifacts in repo root.
+# Convention: any file starting with underscore in project root is ad-hoc.
+# Production code lives in src/, scripts/, tests/, config/, output/.
+/_*.py
+/_*.csv
+/_*.json
+/_*.txt
+/_*.log
+/_*.parquet
+
 # Python
 __pycache__/
 *.py[cod]

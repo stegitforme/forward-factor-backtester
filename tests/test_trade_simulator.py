@@ -223,5 +223,90 @@ class TestCalendarSpec:
         assert spec.put_front_strike == 145.0
 
 
+class TestComputeExitValue:
+    """Tests for compute_exit_value() — the new exit-pricing helper.
+    Patches _price_calendar_legs so we don't hit Polygon."""
+
+    def _make_position(self, structure="atm_call_calendar"):
+        from src.portfolio import Position
+        return Position(
+            ticker="SPY",
+            structure=structure,
+            entry_date=date(2024, 9, 27),
+            front_expiry=date(2024, 11, 29),
+            back_expiry=date(2024, 12, 31),
+            contracts=5,
+            entry_debit=2.99,
+            debit_total=2.99 * 5 * 100,
+            forward_factor_at_entry=0.39,
+            front_strike=571.0,
+            back_strike=571.0,
+        )
+
+    def test_atm_returns_slipped_value(self, monkeypatch):
+        """Mid spread = back - front = 31.80 - 28.70 = 3.10. Slipped at 5% = 2.945."""
+        from src import trade_simulator
+        from src.trade_simulator import compute_exit_value
+        monkeypatch.setattr(
+            trade_simulator,
+            "_price_calendar_legs",
+            lambda *a, **k: (28.70, 31.80),
+        )
+        position = self._make_position()
+        v = compute_exit_value(polygon_client=None, position=position,
+                               on_date=date(2024, 11, 28), slippage_pct=0.05)
+        assert abs(v - 3.10 * 0.95) < 1e-9
+
+    def test_returns_none_when_legs_missing(self, monkeypatch):
+        """If _price_calendar_legs returns None, compute_exit_value returns None."""
+        from src import trade_simulator
+        from src.trade_simulator import compute_exit_value
+        monkeypatch.setattr(trade_simulator, "_price_calendar_legs",
+                            lambda *a, **k: None)
+        position = self._make_position()
+        v = compute_exit_value(polygon_client=None, position=position,
+                               on_date=date(2024, 11, 28))
+        assert v is None
+
+    def test_double_calendar_sums_call_and_put_legs(self, monkeypatch):
+        """Double calendar: call spread + put spread, both slipped together."""
+        from src import trade_simulator
+        from src.trade_simulator import compute_exit_value
+        from src.portfolio import Position
+        # First call returns call legs, second call returns put legs
+        calls = iter([(1.00, 4.00), (2.00, 5.00)])  # call: 3.00, put: 3.00 -> total 6.00
+        monkeypatch.setattr(trade_simulator, "_price_calendar_legs",
+                            lambda *a, **k: next(calls))
+        position = Position(
+            ticker="AAPL",
+            structure="double_calendar_35d",
+            entry_date=date(2024, 9, 27),
+            front_expiry=date(2024, 11, 29),
+            back_expiry=date(2024, 12, 31),
+            contracts=1,
+            entry_debit=4.00,
+            debit_total=400.0,
+            forward_factor_at_entry=0.30,
+            front_strike=160.0, back_strike=160.0,
+            put_front_strike=140.0, put_back_strike=140.0,
+        )
+        v = compute_exit_value(polygon_client=None, position=position,
+                               on_date=date(2024, 11, 28), slippage_pct=0.05)
+        assert abs(v - 6.00 * 0.95) < 1e-9
+
+    def test_inverted_spread_slips_against_us(self, monkeypatch):
+        """If exit mid is negative (front > back), we'd PAY to close.
+        Slippage should make it WORSE, not better."""
+        from src import trade_simulator
+        from src.trade_simulator import compute_exit_value
+        monkeypatch.setattr(trade_simulator, "_price_calendar_legs",
+                            lambda *a, **k: (5.00, 4.50))  # front > back -> mid = -0.50
+        position = self._make_position()
+        v = compute_exit_value(polygon_client=None, position=position,
+                               on_date=date(2024, 11, 28), slippage_pct=0.05)
+        # mid = -0.50, slipped against = -0.50 * 1.05 = -0.525
+        assert abs(v - (-0.525)) < 1e-9
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

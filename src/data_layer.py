@@ -60,13 +60,54 @@ class PolygonClient:
 
         cache_path = Path(cache_dir)
         cache_path.mkdir(parents=True, exist_ok=True)
-        self.cache = Cache(str(cache_path))
+
+        # Layered caches: split by data class for separate management/TTLs.
+        # Legacy cache (data_cache/cache.db) remains as a read-fallback so
+        # existing ~600MB of cached entries from prior phases stays usable.
+        # New writes go to the appropriate layer; legacy reads are promoted
+        # to the new layer on first hit (gradual migration).
+        (cache_path / "reference").mkdir(parents=True, exist_ok=True)
+        (cache_path / "equity").mkdir(parents=True, exist_ok=True)
+        (cache_path / "options").mkdir(parents=True, exist_ok=True)
+        self.cache_reference = Cache(str(cache_path / "reference"))
+        self.cache_equity = Cache(str(cache_path / "equity"))
+        self.cache_options = Cache(str(cache_path / "options"))
+        self.cache_legacy = Cache(str(cache_path))  # original single-cache location
+
+        # Backward-compat: tests/code that reach into self.cache directly still work
+        self.cache = self.cache_legacy
 
         self.session = requests.Session()
         self.session.headers.update({
             "Authorization": f"Bearer {api_key}",
             "User-Agent": "ff-backtester/0.1",
         })
+
+    def _route_cache(self, path: str):
+        """Pick the appropriate cache layer for an endpoint path."""
+        # Reference endpoints (contract listings, ticker metadata, events)
+        if "/reference/" in path:
+            return self.cache_reference
+        # Option-specific endpoints carry "O:" prefixed tickers
+        if "/O:" in path:
+            return self.cache_options
+        # Underlying equity endpoints (no O: prefix) — bars, open-close, etc.
+        return self.cache_equity
+
+    def cache_stats(self) -> dict:
+        """Report per-layer cache size + entry count. Cheap O(1) lookups."""
+        out = {}
+        for name, cache in [
+            ("reference", self.cache_reference),
+            ("equity", self.cache_equity),
+            ("options", self.cache_options),
+            ("legacy", self.cache_legacy),
+        ]:
+            try:
+                out[name] = {"keys": len(cache), "bytes": cache.volume()}
+            except Exception as e:
+                out[name] = {"error": str(e)}
+        return out
 
     # ------------------------------------------------------------------
     # Low-level GET with caching
@@ -78,11 +119,25 @@ class PolygonClient:
         params: Optional[dict] = None,
         ttl_seconds: int = settings.CACHE_TTL_HISTORICAL,
     ) -> dict:
-        """Cached GET request with retry on 429."""
+        """Cached GET request with retry on 429.
+
+        Layered cache: routes by endpoint to one of {reference, equity, options}.
+        Falls back to legacy cache for entries written before the split, then
+        promotes to the new layer on hit.
+        """
         cache_key = f"{path}::{sorted((params or {}).items())}"
-        cached = self.cache.get(cache_key)
+        target_cache = self._route_cache(path)
+
+        # New layer first
+        cached = target_cache.get(cache_key)
         if cached is not None:
             return cached
+        # Legacy fallback (one-way migration)
+        if target_cache is not self.cache_legacy:
+            cached = self.cache_legacy.get(cache_key)
+            if cached is not None:
+                target_cache.set(cache_key, cached, expire=ttl_seconds)
+                return cached
 
         url = f"{self.base_url}{path}"
         attempt = 0
@@ -112,7 +167,7 @@ class PolygonClient:
 
             resp.raise_for_status()
             data = resp.json()
-            self.cache.set(cache_key, data, expire=ttl_seconds)
+            target_cache.set(cache_key, data, expire=ttl_seconds)
             return data
 
     # ------------------------------------------------------------------
@@ -312,3 +367,44 @@ def get_client() -> PolygonClient:
             )
         _client_instance = PolygonClient(api_key=secrets.POLYGON_API_KEY)
     return _client_instance
+
+
+# ============================================================================
+# CLI: python -m src.data_layer cache_report
+# ============================================================================
+
+def _format_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.1f}{unit}"
+        n /= 1024
+    return f"{n:.1f}TB"
+
+
+def _cache_report_cli():
+    """Print per-layer cache stats. Run via: python -m src.data_layer cache_report"""
+    client = get_client()
+    stats = client.cache_stats()
+    print(f"{'layer':<12} {'keys':>10} {'size':>12}")
+    print("-" * 38)
+    total_keys = 0; total_bytes = 0
+    for name, s in stats.items():
+        if "error" in s:
+            print(f"{name:<12}  ERROR: {s['error']}")
+            continue
+        keys = s.get("keys", 0); b = s.get("bytes", 0)
+        total_keys += keys; total_bytes += b
+        print(f"{name:<12} {keys:>10} {_format_bytes(b):>12}")
+    print("-" * 38)
+    print(f"{'TOTAL':<12} {total_keys:>10} {_format_bytes(total_bytes):>12}")
+
+
+if __name__ == "__main__":
+    import sys
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "cache_report"
+    if cmd == "cache_report":
+        _cache_report_cli()
+    else:
+        print(f"Unknown command: {cmd}")
+        print(f"Available: cache_report")
+        sys.exit(1)

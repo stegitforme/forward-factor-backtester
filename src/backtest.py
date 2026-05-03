@@ -48,7 +48,7 @@ from src.portfolio import (
     select_top_candidates,
     size_trade,
 )
-from src.trade_simulator import CalendarSpec, simulate_calendar
+from src.trade_simulator import CalendarSpec, compute_exit_value, simulate_calendar
 from src.universe import Universe, compute_options_volume_universe
 
 
@@ -108,13 +108,27 @@ class BacktestResult:
 # Per-day candidate discovery (the hot loop)
 # ============================================================================
 
+def resolve_ff_threshold(cell_name: str) -> float:
+    """Resolve the FF threshold for a cell, handling both uniform-float and
+    per-cell-dict settings.FF_THRESHOLD shapes (Phase 2c per-cell calibration).
+
+    - If FF_THRESHOLD is a float: uniform across cells.
+    - If FF_THRESHOLD is a dict: look up by cell_name; fall back to
+      FF_THRESHOLD_DEFAULT if not present.
+    """
+    raw = settings.FF_THRESHOLD
+    if isinstance(raw, dict):
+        return float(raw.get(cell_name, settings.FF_THRESHOLD_DEFAULT))
+    return float(raw)
+
+
 def find_candidates_for_day(
     today: date,
     universe: Universe,
     cell: Cell,
     polygon_client,
     earnings_filter: EarningsFilter,
-    ff_threshold: float = settings.FF_THRESHOLD,
+    ff_threshold: float | None = None,  # None => resolve from settings per cell
     dte_buffer: int = settings.DTE_BUFFER_DAYS,
 ) -> list[TradeCandidate]:
     """
@@ -129,6 +143,10 @@ def find_candidates_for_day(
     """
     from src.chain_resolver import resolve_atm_option, resolve_delta_option
     from src.ff_calculator import calculate_forward_factor
+
+    # Resolve per-cell threshold from settings if caller didn't pass an explicit one
+    if ff_threshold is None:
+        ff_threshold = resolve_ff_threshold(cell.name)
 
     candidates: list[TradeCandidate] = []
     is_double = cell.structure == "double_calendar_35d"
@@ -270,24 +288,28 @@ def step_one_day(
     exit_threshold_date = today + timedelta(days=settings.EXIT_DAYS_BEFORE_FRONT_EXPIRY)
     for position in list(portfolio.positions):
         if position.front_expiry <= exit_threshold_date:
-            # Simulate the exit
-            spec = CalendarSpec(
-                ticker=position.ticker,
-                entry_date=position.entry_date,
-                structure=position.structure,
-                front_expiry=position.front_expiry,
-                back_expiry=position.back_expiry,
-                front_strike=0.0,  # placeholder; real impl tracks strikes
-                back_strike=0.0,
-                contracts=position.contracts,
-                forward_factor_at_entry=position.forward_factor_at_entry,
+            # Re-price the spread at today's close. Returns None if Polygon
+            # has no data within ±3 days for either leg (e.g. illiquid
+            # deep-ITM contract after the underlying drifted).
+            exit_value = compute_exit_value(polygon_client, position, today)
+            if exit_value is None:
+                log.warning(
+                    "Exit pricing unavailable for %s entry=%s strikes=%s/%s "
+                    "front_exp=%s exit_date=%s; falling back to entry_debit "
+                    "(zero P&L before commissions)",
+                    position.ticker, position.entry_date,
+                    position.front_strike, position.back_strike,
+                    position.front_expiry, today,
+                )
+                exit_value = position.entry_debit
+
+            legs_per_spread = 4 if position.structure == "double_calendar_35d" else 2
+            commissions = (
+                settings.COMMISSION_PER_CONTRACT
+                * legs_per_spread
+                * 2  # entry + exit
+                * position.contracts
             )
-            # In a full impl, we'd re-query exit prices here.
-            # For now we approximate exit at parity (no P&L) — replace with
-            # actual simulate_calendar() call once Polygon chain queries
-            # are wired up.
-            exit_value = position.entry_debit  # break-even placeholder
-            commissions = settings.COMMISSION_PER_CONTRACT * 4 * position.contracts * 2
             pnl = close_position(portfolio, position, exit_value, commissions)
             # Find the matching open row (logged when position was opened)
             # and update it with exit info instead of duplicating.
@@ -332,10 +354,14 @@ def step_one_day(
         contracts = size_trade(candidate, portfolio)
         if contracts < 1:
             continue
+        # Slip entry debit symmetric with exit: pay (1 + slip) on the way in.
+        # Exit will receive (1 - slip) via compute_exit_value, so a flat
+        # round-trip eats 2 * slip * mid + commissions.
+        slipped_debit = candidate.estimated_debit_per_spread * (1.0 + settings.SLIPPAGE_PCT)
         try:
             open_position(
                 portfolio, candidate, contracts,
-                actual_debit_per_spread=candidate.estimated_debit_per_spread
+                actual_debit_per_spread=slipped_debit,
             )
             # Log the open immediately so smoke tests and short windows
             # see trades. pnl_total=NaN signals "still open"; will be
@@ -348,9 +374,14 @@ def step_one_day(
                 "front_expiry": candidate.front_expiry,
                 "back_expiry": candidate.back_expiry,
                 "contracts": contracts,
-                "entry_debit": candidate.estimated_debit_per_spread,
+                "entry_debit": slipped_debit,
                 "forward_factor_at_entry": candidate.forward_factor,
                 "pnl_total": float("nan"),
+                # Strikes recorded for downstream MTM of still-open positions
+                "front_strike": candidate.front_strike,
+                "back_strike": candidate.back_strike,
+                "put_front_strike": candidate.put_front_strike,
+                "put_back_strike": candidate.put_back_strike,
             })
         except ValueError as e:
             log.warning("Could not open %s: %s", candidate.ticker, e)

@@ -17,6 +17,9 @@ urllib3>=2.0.0
 # Caching layer for API responses
 diskcache>=5.6.0
 
+# Parquet I/O for candidates dump (Phase 3 refactor)
+pyarrow>=15.0.0
+
 # Plotting / dashboard
 matplotlib>=3.7.0
 plotly>=5.17.0

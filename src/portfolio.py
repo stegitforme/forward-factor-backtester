@@ -50,9 +50,16 @@ class Position:
     front_expiry: date
     back_expiry: date
     contracts: int
-    entry_debit: float           # per spread
+    entry_debit: float           # per spread, slippage-applied
     debit_total: float           # entry_debit * contracts * 100
     forward_factor_at_entry: float
+    # Strike fields needed to re-price the spread at exit. Default to 0.0 / None
+    # so existing fixtures and tests that don't set them keep working; production
+    # opens always populate them via open_position().
+    front_strike: float = 0.0
+    back_strike: float = 0.0
+    put_front_strike: Optional[float] = None
+    put_back_strike: Optional[float] = None
 
 
 @dataclass
@@ -198,6 +205,10 @@ def open_position(
         entry_debit=actual_debit_per_spread,
         debit_total=debit_total,
         forward_factor_at_entry=candidate.forward_factor,
+        front_strike=candidate.front_strike,
+        back_strike=candidate.back_strike,
+        put_front_strike=candidate.put_front_strike,
+        put_back_strike=candidate.put_back_strike,
     )
     portfolio.cash -= debit_total
     portfolio.positions.append(position)

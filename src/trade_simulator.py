@@ -299,6 +299,70 @@ def simulate_calendar(
 
 
 # ============================================================================
+# Exit-only pricing (for closing already-open positions in the backtest loop)
+# ============================================================================
+
+def compute_exit_value(
+    polygon_client,
+    position,
+    on_date: date,
+    slippage_pct: float = settings.SLIPPAGE_PCT,
+) -> Optional[float]:
+    """
+    Slipped exit value per spread for an already-open Position, or None if
+    Polygon has no daily bar for either leg within the helper's ±3-day
+    asof window. The caller (step_one_day) falls back to position.entry_debit
+    + log warning when None is returned.
+
+    Holiday handling is implicit: _price_calendar_legs uses bars.index.asof,
+    which returns the most recent bar on or before on_date — so a Thursday
+    Thanksgiving exit naturally falls back to Wednesday's close.
+
+    Slippage applies on the way out: we receive (mid * (1 - slippage_pct))
+    on a positive spread. Pathological inverted spreads (rare; spread <= 0
+    at exit) are treated as a debit-to-close — slip against us via (1 + slip).
+    """
+    is_double = position.structure == "double_calendar_35d"
+
+    call_legs = _price_calendar_legs(
+        polygon_client,
+        underlying=position.ticker,
+        front_expiry=position.front_expiry,
+        back_expiry=position.back_expiry,
+        front_strike=position.front_strike,
+        back_strike=position.back_strike,
+        contract_type="C",
+        on_date=on_date,
+    )
+    if call_legs is None:
+        return None
+    call_front_mid, call_back_mid = call_legs
+    mid_value = call_back_mid - call_front_mid
+
+    if is_double:
+        if position.put_front_strike is None or position.put_back_strike is None:
+            return None
+        put_legs = _price_calendar_legs(
+            polygon_client,
+            underlying=position.ticker,
+            front_expiry=position.front_expiry,
+            back_expiry=position.back_expiry,
+            front_strike=position.put_front_strike,
+            back_strike=position.put_back_strike,
+            contract_type="P",
+            on_date=on_date,
+        )
+        if put_legs is None:
+            return None
+        mid_value += (put_legs[1] - put_legs[0])
+
+    if mid_value <= 0:
+        # Inverted spread at exit: we'd PAY to close. Slip against us.
+        return mid_value * (1.0 + slippage_pct)
+    return mid_value * (1.0 - slippage_pct)
+
+
+# ============================================================================
 # Pure-math version (for testing without Polygon)
 # ============================================================================
 
