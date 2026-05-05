@@ -35,6 +35,9 @@ ETF_TICKERS_NO_EARNINGS: set[str] = {
     "XLF", "XLE", "XLK", "XLY", "XLV", "XLP", "XLU", "XLB", "XLI",
     "KRE", "KBE", "IBB", "ARKK", "TQQQ", "SQQQ", "SOXL", "SOXS",
     "UVXY", "VXX", "SVXY", "BIL", "SGOV",
+    # Added 2026-05-04 for Phase 5 ORATS work — international + bond + commodity
+    # ETFs in the 23-ticker universe. All have no corporate earnings.
+    "EEM", "FXI", "HYG", "USO",
 }
 
 

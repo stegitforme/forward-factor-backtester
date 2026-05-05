@@ -207,11 +207,18 @@ def _exit_value_per_spread(client, pos: _Pos, on_date: date, slippage_pct: float
 # ============================================================================
 
 def simulate(candidates_path: str | Path, cfg: RunConfig, output_dir: str | Path,
-             discovery_run_id: Optional[str] = None) -> dict:
+             discovery_run_id: Optional[str] = None,
+             client=None) -> dict:
     """Run the simulation. Writes trade log, daily equity, metrics, provenance.
     Returns the metrics dict.
+
+    `client` parameter (added 2026-05-04 for ORATS work): if None, uses the
+    default Polygon client. Pass an OratsBarsClient instance (or any object
+    implementing get_option_daily_bars(symbol, start, end)) to run the
+    simulator on ORATS data without touching Polygon.
     """
-    client = get_client()
+    if client is None:
+        client = get_client()
     cands = pd.read_parquet(candidates_path)
     # Date column: may come back as object; normalize to date
     cands["date"] = cands["date"].apply(lambda v: v if isinstance(v, date) else pd.Timestamp(v).date())

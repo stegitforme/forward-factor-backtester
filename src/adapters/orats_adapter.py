@@ -120,6 +120,9 @@ def load_orats_day_filtered(d: date, tickers: Iterable[str]) -> pd.DataFrame:
          expensive first-pass; subsequent reads of any day in that year are
          instant.
       3. Concatenate per-ticker slices into one DataFrame.
+
+    NOTE: For short date windows (a few days), prefer load_orats_day_direct —
+    it skips the full year cache build entirely and reads only the needed ZIPs.
     """
     tickers = sorted({t.upper() for t in tickers})
     if not tickers:
@@ -137,6 +140,22 @@ def load_orats_day_filtered(d: date, tickers: Iterable[str]) -> pd.DataFrame:
     if not out_chunks:
         return pd.DataFrame(columns=KEEP_COLUMNS)
     return pd.concat(out_chunks, ignore_index=True)
+
+
+def load_orats_day_direct(d: date, tickers: Iterable[str]) -> pd.DataFrame:
+    """Read one ORATS day directly from ZIP, filtered to ticker subset.
+
+    Bypasses the year cache entirely. Use for short windows (a few days) or
+    when you don't want to incur the full-year cache build. Cost: ~1.5s per
+    day (one full ZIP parse).
+    """
+    tickers_set = {t.upper() for t in tickers}
+    if not tickers_set:
+        return pd.DataFrame(columns=KEEP_COLUMNS)
+    raw = load_orats_day_raw(d)
+    if raw.empty:
+        return raw
+    return raw[raw["ticker"].isin(tickers_set)].reset_index(drop=True)
 
 
 # ============================================================================
@@ -190,28 +209,86 @@ def _build_year_cache(ticker: str, year: int) -> pd.DataFrame:
     return full
 
 
-def warm_cache(tickers: Iterable[str], years: Iterable[int],
-               max_workers: int = 4) -> None:
-    """Pre-build ticker-year caches in parallel. Idempotent — skips existing.
+def warm_year_for_universe(year: int, tickers: Iterable[str]) -> None:
+    """Read each ZIP in `year` ONCE, filter to all `tickers` in one pass, write
+    per-ticker parquet caches.
 
-    Useful before running discovery on a long date range to amortize the
-    one-time ZIP-parsing cost.
+    Vastly faster than calling _build_year_cache(ticker, year) per ticker
+    (which would re-read every ZIP for each ticker). For a 23-ticker universe
+    this is ~23× faster than the per-ticker approach.
+
+    Idempotent — skips tickers whose cache already exists for the year.
+    """
+    tickers = sorted({t.upper() for t in tickers})
+    if not tickers:
+        return
+    # Skip tickers already cached for this year
+    pending = [t for t in tickers if not cache_path_for(t, year).exists()]
+    if not pending:
+        return
+    yr_dir = ORATS_ROOT / str(year)
+    if not yr_dir.exists():
+        return
+    zips = sorted(yr_dir.glob("ORATS_SMV_Strikes_*.zip"))
+    if not zips:
+        return
+
+    log.info("Warming ORATS year cache: %d/%d (%d tickers, %d ZIPs)",
+             year, year, len(pending), len(zips))
+    pending_set = set(pending)
+    # ticker -> list of per-day chunks
+    chunks: dict[str, list[pd.DataFrame]] = {t: [] for t in pending_set}
+    for z in zips:
+        try:
+            df = pd.read_csv(z, compression="zip", usecols=KEEP_COLUMNS)
+            df = df[df["ticker"].isin(pending_set)]
+            if df.empty:
+                continue
+            for t, sub in df.groupby("ticker"):
+                if t in pending_set:
+                    chunks[t].append(sub)
+        except Exception as e:
+            log.warning("warm_year: failed to read %s: %s", z.name, e)
+
+    for t, parts in chunks.items():
+        cp = cache_path_for(t, year)
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        if not parts:
+            # Write empty parquet so subsequent reads short-circuit instead of
+            # re-running this expensive scan.
+            pd.DataFrame(columns=KEEP_COLUMNS).to_parquet(cp, index=False)
+            continue
+        full = pd.concat(parts, ignore_index=True)
+        full["trade_date"] = pd.to_datetime(full["trade_date"]).dt.date
+        full["expirDate"] = pd.to_datetime(full["expirDate"]).dt.date
+        full.to_parquet(cp, index=False)
+
+
+def warm_cache(tickers: Iterable[str], years: Iterable[int],
+               max_workers: int = 1) -> None:
+    """Pre-build ticker-year caches. Calls warm_year_for_universe per year.
+
+    With the batched warm_year_for_universe, threading across years gives a
+    modest additional speedup (years are independent) but is bounded by
+    disk I/O. Default max_workers=1 since each year is already an
+    expensive single-pass read.
     """
     tickers = sorted({t.upper() for t in tickers})
     years = sorted(set(years))
-    work = [(t, y) for t in tickers for y in years
-            if not cache_path_for(t, y).exists()]
-    if not work:
+    if not tickers or not years:
         return
-    log.info("Warming ORATS cache: %d (ticker, year) combos", len(work))
+    if max_workers <= 1:
+        for y in years:
+            warm_year_for_universe(y, tickers)
+        return
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futs = {ex.submit(_build_year_cache, t, y): (t, y) for t, y in work}
+        futs = {ex.submit(warm_year_for_universe, y, tickers): y for y in years}
         for fut in as_completed(futs):
-            t, y = futs[fut]
+            y = futs[fut]
             try:
                 fut.result()
             except Exception as e:
-                log.error("cache build failed %s/%d: %s", t, y, e)
+                log.error("warm_year failed %d: %s", y, e)
 
 
 # ============================================================================
@@ -334,3 +411,132 @@ def find_atm_for_dte(day_df: pd.DataFrame, ticker: str, target_dte: int,
     spot = float(chain["stkPx"].iloc[0])
     chain["atm_dist"] = (chain["strike"] - spot).abs()
     return chain.sort_values("atm_dist").iloc[0]
+
+
+# ============================================================================
+# OratsBarsClient — quacks like PolygonClient.get_option_daily_bars
+#
+# The existing simulator (src/simulate_portfolio.py + src/trade_simulator.py)
+# uses Polygon-style option tickers ("O:SPY241129C00580000") and looks up
+# daily OHLCV bars via client.get_option_daily_bars(symbol, start, end).
+#
+# This client lets the simulator run unchanged on ORATS data: it parses the
+# Polygon symbol back to (ticker, expiry, type, strike) and synthesizes a
+# bar-shaped DataFrame from ORATS quote midpoints.
+# ============================================================================
+
+OPTION_SYMBOL_RE = None  # built lazily
+
+
+def _parse_polygon_option_symbol(symbol: str) -> Optional[tuple[str, date, str, float]]:
+    """Parse 'O:SPY241129C00580000' -> ('SPY', date(2024,11,29), 'C', 580.0).
+
+    Returns None if symbol doesn't match the expected format.
+    """
+    import re
+    global OPTION_SYMBOL_RE
+    if OPTION_SYMBOL_RE is None:
+        OPTION_SYMBOL_RE = re.compile(
+            r"^O:([A-Z\.]+?)(\d{6})([CP])(\d{8})$"
+        )
+    m = OPTION_SYMBOL_RE.match(symbol)
+    if m is None:
+        return None
+    underlying, yymmdd, opt_type, strike_str = m.groups()
+    try:
+        year = 2000 + int(yymmdd[:2])
+        month = int(yymmdd[2:4])
+        day = int(yymmdd[4:6])
+        expiry = date(year, month, day)
+    except ValueError:
+        return None
+    strike = int(strike_str) / 1000.0
+    return underlying, expiry, opt_type, strike
+
+
+def _orats_mid(row: pd.Series, opt_type: str) -> Optional[float]:
+    """Mid quote from one ORATS row for the requested side. Falls back to
+    cValue / pValue (ORATS' smooth-surface fair price) if bid/ask quotes are
+    zero or missing — matches what a real fill would look like for thin chains.
+    """
+    if opt_type == "C":
+        bid = row.get("cBidPx")
+        ask = row.get("cAskPx")
+        val = row.get("cValue")
+    else:
+        bid = row.get("pBidPx")
+        ask = row.get("pAskPx")
+        val = row.get("pValue")
+    try:
+        if bid is not None and ask is not None and not pd.isna(bid) and not pd.isna(ask):
+            b = float(bid); a = float(ask)
+            if b > 0 and a > 0 and a >= b:
+                return (b + a) / 2.0
+    except (TypeError, ValueError):
+        pass
+    if val is not None and not pd.isna(val):
+        try:
+            v = float(val)
+            return v if v > 0 else None
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+class OratsBarsClient:
+    """Adapter that exposes get_option_daily_bars(symbol, start, end) backed
+    by the ORATS ticker-year cache. Drop-in replacement for PolygonClient
+    in the simulator's MTM + exit-pricing call sites.
+
+    The synthesized bar DataFrame has columns: open, high, low, close, vwap,
+    volume — all set to the ORATS mid (or cValue/pValue fallback). Index is
+    pd.DatetimeIndex of trade_dates. This shape matches what
+    `_mid_from_bar()` and `bars.index.asof()` expect.
+
+    Cache: instance maintains a per-(ticker, expiry, strike, type) cache so
+    repeated lookups within a sim run are O(1).
+    """
+
+    def __init__(self):
+        self._cache: dict[tuple[str, date, str, float], pd.DataFrame] = {}
+
+    def get_option_daily_bars(self, symbol: str, start: date, end: date) -> pd.DataFrame:
+        parsed = _parse_polygon_option_symbol(symbol)
+        if parsed is None:
+            return pd.DataFrame()
+        underlying, expiry, opt_type, strike = parsed
+        key = (underlying, expiry, opt_type, strike)
+        if key in self._cache:
+            df = self._cache[key]
+        else:
+            df = self._build_bars_for_contract(underlying, expiry, opt_type, strike)
+            self._cache[key] = df
+        if df.empty:
+            return df
+        # Slice to requested window (caller passes ±3 day window typically)
+        return df.loc[(df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))]
+
+    def _build_bars_for_contract(self, underlying: str, expiry: date,
+                                  opt_type: str, strike: float) -> pd.DataFrame:
+        """Look up ORATS rows for this contract across its lifetime, build
+        a bar-shaped DataFrame indexed by trade_date.
+        """
+        # ORATS rows for this ticker exist in (year of expiry) and possibly
+        # the year before. Fetch from start-of-expiry-year-minus-1 through
+        # expiry, slice to dates with this exact (expiry, strike, type).
+        start_year = expiry.year - 1 if expiry.month <= 3 else expiry.year
+        start_date = date(start_year, 1, 1)
+        rng = load_orats_range(start_date, expiry, [underlying])
+        if rng.empty:
+            return pd.DataFrame()
+        sub = rng[(rng["expirDate"] == expiry) & (rng["strike"] == strike)]
+        if sub.empty:
+            return pd.DataFrame()
+        mids = sub.apply(lambda r: _orats_mid(r, opt_type), axis=1)
+        out = pd.DataFrame({
+            "open": mids.values, "high": mids.values, "low": mids.values,
+            "close": mids.values, "vwap": mids.values, "volume": 0,
+        }, index=pd.DatetimeIndex([pd.Timestamp(d) for d in sub["trade_date"]], name="date"))
+        out = out.dropna(subset=["close"])
+        out = out[~out.index.duplicated(keep="first")].sort_index()
+        return out

@@ -185,6 +185,84 @@ def test_find_atm_for_dte_returns_none_for_missing_ticker(isolated_cache, mini_c
 
 
 # ============================================================================
+# Polygon-symbol parser
+# ============================================================================
+
+def test_parse_polygon_symbol_call():
+    out = orats._parse_polygon_option_symbol("O:SPY241129C00580000")
+    assert out is not None
+    underlying, expiry, opt_type, strike = out
+    assert underlying == "SPY"
+    assert expiry == date(2024, 11, 29)
+    assert opt_type == "C"
+    assert strike == 580.0
+
+
+def test_parse_polygon_symbol_put_with_decimal_strike():
+    out = orats._parse_polygon_option_symbol("O:KRE250515P00056500")
+    assert out is not None
+    _, _, opt_type, strike = out
+    assert opt_type == "P"
+    assert strike == 56.5
+
+
+def test_parse_polygon_symbol_invalid_returns_none():
+    assert orats._parse_polygon_option_symbol("not a symbol") is None
+    assert orats._parse_polygon_option_symbol("O:") is None
+
+
+# ============================================================================
+# Mid quote helper
+# ============================================================================
+
+def test_orats_mid_uses_bid_ask_when_present():
+    row = pd.Series({"cBidPx": 1.00, "cAskPx": 1.20, "cValue": 0.50})
+    assert orats._orats_mid(row, "C") == pytest.approx(1.10)
+
+
+def test_orats_mid_falls_back_to_value_when_quotes_missing():
+    row = pd.Series({"cBidPx": 0.0, "cAskPx": 0.0, "cValue": 1.05})
+    assert orats._orats_mid(row, "C") == pytest.approx(1.05)
+
+
+def test_orats_mid_returns_none_when_all_missing():
+    row = pd.Series({"cBidPx": None, "cAskPx": None, "cValue": None})
+    assert orats._orats_mid(row, "C") is None
+
+
+def test_orats_mid_put_side():
+    row = pd.Series({"pBidPx": 2.00, "pAskPx": 2.10, "pValue": 1.00})
+    assert orats._orats_mid(row, "P") == pytest.approx(2.05)
+
+
+# ============================================================================
+# OratsBarsClient — quacks like PolygonClient
+# ============================================================================
+
+def test_orats_bars_client_returns_bars_for_real_contract(isolated_cache, mini_cache):
+    """Synthesize a bar lookup for a SPY call near 2024-10-29."""
+    client = orats.OratsBarsClient()
+    # Pick a strike + expiry we know exists from the mini-cache (read it directly)
+    spy_oct29 = orats.load_orats_day_filtered(date(2024, 10, 29), ["SPY"])
+    # Pick first call with positive bid
+    sample = spy_oct29[(spy_oct29["cBidPx"] > 0)].iloc[0]
+    expiry = sample["expirDate"]
+    strike = float(sample["strike"])
+    sym = f"O:SPY{expiry:%y%m%d}C{int(round(strike*1000)):08d}"
+    bars = client.get_option_daily_bars(sym, date(2024, 10, 28), date(2024, 10, 30))
+    assert not bars.empty
+    assert "close" in bars.columns
+    assert "vwap" in bars.columns
+    assert all(bars["close"] > 0)
+
+
+def test_orats_bars_client_invalid_symbol_returns_empty(isolated_cache):
+    client = orats.OratsBarsClient()
+    bars = client.get_option_daily_bars("garbage", date(2024, 10, 28), date(2024, 10, 30))
+    assert bars.empty
+
+
+# ============================================================================
 # Slow integration tests (full year-cache build) — gated by env var
 # ============================================================================
 
