@@ -42,6 +42,76 @@ log = logging.getLogger(__name__)
 ORATS_ROOT = Path("/Users/sggmpb13/trading")
 CACHE_ROOT = Path.home() / "orats_data_cache"
 
+# ============================================================================
+# Ticker rename history (Phase 5)
+#
+# Two universe tickers have predecessor symbols in ORATS that materially extend
+# their backtest history. Rather than rewrite cached parquet files (which would
+# couple cache to alias logic), we resolve at lookup time: discovery + bars
+# clients consult resolve_ticker(canonical, date) to pick the right ORATS
+# symbol per trade date.
+#
+# Verified empirically by probing each universe ticker's first appearance in
+# ORATS, plus checking known predecessor candidates (e.g. ARKW for ARKK,
+# IAU/PHYS for GLD, MCHI for KWEB). No other 23-universe ticker has a rename;
+# all other coverage gaps (ARKK, KWEB, GLD, SLV, USO, HYG, COIN) are genuine
+# ORATS-side coverage gaps without a predecessor symbol.
+#
+# Rename windows (verified 2026-05-04):
+#   FB     -> META on 2022-06-09 (Facebook -> Meta Platforms ticker change)
+#   GOOG   -> GOOGL on 2015-01-02 (when ORATS first carries GOOGL data —
+#            note this is 9 months AFTER the actual stock split on 2014-04-03;
+#            during 2014-04-03 → 2014-12-31 we use GOOG as Class A proxy
+#            because ORATS lacks GOOGL coverage in that window)
+#
+# GOOGL caveat: post-split GOOG (Class C, no voting) and GOOGL (Class A, voting)
+# trade at near-identical prices and IVs (typically <1% spread). Pre-split
+# (2007-2014-04-02), GOOG is the only Google share class. The 9-month
+# "GOOGL exists but ORATS doesn't have it" window is bridged using GOOG —
+# acceptable noise vs the alternative of having a backtest gap. Documented
+# in PHASE_5_TICKER_AVAILABILITY.md.
+# ============================================================================
+
+TICKER_HISTORY: dict[str, list[tuple[str, date, Optional[date]]]] = {
+    "META":  [("FB",    date(2013, 1, 2),  date(2022, 6, 8)),
+              ("META",  date(2022, 6, 9),  None)],
+    "GOOGL": [("GOOG",  date(2007, 1, 3),  date(2015, 1, 1)),
+              ("GOOGL", date(2015, 1, 2),  None)],
+}
+
+
+def resolve_ticker(target_ticker: str, trade_date: date) -> str:
+    """Return the ORATS symbol to use for `target_ticker` on `trade_date`.
+
+    For tickers without a rename history, returns target_ticker unchanged.
+    For aliased tickers, picks the predecessor or canonical symbol that
+    covered `trade_date`. If the date is outside all known windows for an
+    aliased ticker, returns the target_ticker unchanged (caller will get
+    empty data — correct behavior for dates pre-inception).
+    """
+    history = TICKER_HISTORY.get(target_ticker)
+    if history is None:
+        return target_ticker
+    for orats_sym, start, end in history:
+        if trade_date >= start and (end is None or trade_date <= end):
+            return orats_sym
+    return target_ticker
+
+
+def expand_universe_for_lookup(universe: Iterable[str]) -> list[str]:
+    """Return the union of all ORATS symbols needed to cover `universe`
+    across history (canonical + all predecessors). Use when warming caches
+    or loading day chains so the data needed by the alias resolver is present.
+    """
+    expanded = set()
+    for t in universe:
+        expanded.add(t)
+        if t in TICKER_HISTORY:
+            for orats_sym, _, _ in TICKER_HISTORY[t]:
+                expanded.add(orats_sym)
+    return sorted(expanded)
+
+
 # All 39 columns shipped in ORATS_SMV_Strikes (verified from 2024-10-29 ZIP).
 COLUMNS = [
     "ticker", "cOpra", "pOpra", "stkPx", "expirDate", "yte", "strike",
@@ -520,23 +590,45 @@ class OratsBarsClient:
                                   opt_type: str, strike: float) -> pd.DataFrame:
         """Look up ORATS rows for this contract across its lifetime, build
         a bar-shaped DataFrame indexed by trade_date.
+
+        Aliasing: if `underlying` has a TICKER_HISTORY entry (e.g. META, GOOGL),
+        load data under ALL aliases (FB+META, GOOG+GOOGL) and concatenate.
+        For an option whose lifetime spans a rename date, both predecessor and
+        successor symbols carry data for the same physical contract — we want
+        both halves so the bars timeseries is continuous.
         """
+        # Decide which ORATS symbols to query. For aliased tickers, expand
+        # to the full set; for the rest, query the canonical name only.
+        symbols_to_query: list[str]
+        if underlying in TICKER_HISTORY:
+            symbols_to_query = sorted({sym for sym, _, _ in TICKER_HISTORY[underlying]})
+        else:
+            symbols_to_query = [underlying]
+
         # ORATS rows for this ticker exist in (year of expiry) and possibly
         # the year before. Fetch from start-of-expiry-year-minus-1 through
         # expiry, slice to dates with this exact (expiry, strike, type).
         start_year = expiry.year - 1 if expiry.month <= 3 else expiry.year
         start_date = date(start_year, 1, 1)
-        rng = load_orats_range(start_date, expiry, [underlying])
-        if rng.empty:
+
+        all_chunks = []
+        for sym in symbols_to_query:
+            rng = load_orats_range(start_date, expiry, [sym])
+            if rng.empty:
+                continue
+            sub = rng[(rng["expirDate"] == expiry) & (rng["strike"] == strike)]
+            if not sub.empty:
+                all_chunks.append(sub)
+
+        if not all_chunks:
             return pd.DataFrame()
-        sub = rng[(rng["expirDate"] == expiry) & (rng["strike"] == strike)]
-        if sub.empty:
-            return pd.DataFrame()
-        mids = sub.apply(lambda r: _orats_mid(r, opt_type), axis=1)
+        full_sub = pd.concat(all_chunks, ignore_index=True)
+
+        mids = full_sub.apply(lambda r: _orats_mid(r, opt_type), axis=1)
         out = pd.DataFrame({
             "open": mids.values, "high": mids.values, "low": mids.values,
             "close": mids.values, "vwap": mids.values, "volume": 0,
-        }, index=pd.DatetimeIndex([pd.Timestamp(d) for d in sub["trade_date"]], name="date"))
+        }, index=pd.DatetimeIndex([pd.Timestamp(d) for d in full_sub["trade_date"]], name="date"))
         out = out.dropna(subset=["close"])
         out = out[~out.index.duplicated(keep="first")].sort_index()
         return out

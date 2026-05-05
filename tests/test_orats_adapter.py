@@ -263,6 +263,64 @@ def test_orats_bars_client_invalid_symbol_returns_empty(isolated_cache):
 
 
 # ============================================================================
+# Ticker aliasing (FB→META, GOOG→GOOGL)
+# ============================================================================
+
+def test_resolve_ticker_returns_unchanged_for_non_aliased():
+    assert orats.resolve_ticker("SPY", date(2008, 1, 2)) == "SPY"
+    assert orats.resolve_ticker("MSTR", date(2008, 1, 2)) == "MSTR"
+    assert orats.resolve_ticker("KRE", date(2024, 1, 2)) == "KRE"
+
+
+def test_resolve_ticker_meta_pre_rename_uses_fb():
+    # Rename effective 2022-06-09 — anything before that is FB
+    assert orats.resolve_ticker("META", date(2018, 2, 5)) == "FB"
+    assert orats.resolve_ticker("META", date(2020, 3, 15)) == "FB"
+    assert orats.resolve_ticker("META", date(2022, 6, 8)) == "FB"  # last FB day
+
+
+def test_resolve_ticker_meta_post_rename_uses_meta():
+    assert orats.resolve_ticker("META", date(2022, 6, 9)) == "META"  # first META day
+    assert orats.resolve_ticker("META", date(2024, 1, 2)) == "META"
+
+
+def test_resolve_ticker_googl_pre_orats_split_uses_goog():
+    # Pre-2015-01-02 (when ORATS first has GOOGL data), use GOOG.
+    # Includes pre-split (until 2014-04-02) and the bridge window
+    # (2014-04-03 → 2014-12-31 where GOOGL exists but ORATS lacks it).
+    assert orats.resolve_ticker("GOOGL", date(2008, 9, 15)) == "GOOG"  # pre-split
+    assert orats.resolve_ticker("GOOGL", date(2014, 4, 2)) == "GOOG"   # split day
+    assert orats.resolve_ticker("GOOGL", date(2014, 11, 1)) == "GOOG"  # bridge window
+    assert orats.resolve_ticker("GOOGL", date(2015, 1, 1)) == "GOOG"   # last GOOG-as-proxy day
+
+
+def test_resolve_ticker_googl_post_orats_uses_googl():
+    assert orats.resolve_ticker("GOOGL", date(2015, 1, 2)) == "GOOGL"  # first ORATS GOOGL day
+    assert orats.resolve_ticker("GOOGL", date(2024, 1, 2)) == "GOOGL"
+
+
+def test_resolve_ticker_meta_before_inception_falls_back():
+    # Before FB IPO (2012-05-18) — outside any window, returns canonical
+    assert orats.resolve_ticker("META", date(2010, 1, 2)) == "META"
+
+
+def test_expand_universe_preserves_non_aliased():
+    out = orats.expand_universe_for_lookup(["SPY", "IWM", "TLT"])
+    assert out == ["IWM", "SPY", "TLT"]
+
+
+def test_expand_universe_adds_predecessors_for_aliased():
+    out = orats.expand_universe_for_lookup(["META", "GOOGL", "SPY"])
+    assert set(out) == {"FB", "META", "GOOG", "GOOGL", "SPY"}
+
+
+def test_expand_universe_idempotent_when_aliases_already_present():
+    # Caller might already have FB in their list; expand shouldn't duplicate
+    out = orats.expand_universe_for_lookup(["META", "FB", "SPY"])
+    assert sorted(out) == ["FB", "META", "SPY"]
+
+
+# ============================================================================
 # Slow integration tests (full year-cache build) — gated by env var
 # ============================================================================
 

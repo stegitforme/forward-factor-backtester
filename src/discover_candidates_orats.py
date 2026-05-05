@@ -57,10 +57,17 @@ def _resolve_one(day_chain: pd.DataFrame, ticker: str, on_date: date,
                  iv_column: str, ef: Optional[EarningsFilter]) -> dict:
     """Resolve one (ticker, date, cell) using a pre-loaded day chain.
 
+    `ticker` is the CANONICAL universe symbol (e.g. "META"). Internally we
+    resolve to the ORATS symbol active on `on_date` (e.g. "FB" pre-2022-06-09)
+    via orats.resolve_ticker. Output row always carries the canonical name
+    so downstream simulation/reporting see one consistent identifier.
+
     Returns the candidate row dict (always — schema-uniform even on miss).
     """
+    orats_symbol = orats.resolve_ticker(ticker, on_date)
     row: dict = {
         "ticker": ticker,
+        "orats_symbol_used": orats_symbol if orats_symbol != ticker else None,
         "front_dte": None, "back_dte": None,
         "front_strike": None, "back_strike": None,
         "front_expiry": None, "back_expiry": None,
@@ -81,8 +88,9 @@ def _resolve_one(day_chain: pd.DataFrame, ticker: str, on_date: date,
         except Exception as e:
             log.debug("earnings check failed %s %s: %s", ticker, on_date, e)
 
-    # ATM-ish strike at front DTE (call leg)
-    front = orats.find_atm_for_dte(day_chain, ticker, dte_front, dte_buffer)
+    # ATM-ish strike at front DTE (call leg). Look up using the resolved
+    # ORATS symbol (e.g. "FB" for "META" pre-2022-06-09).
+    front = orats.find_atm_for_dte(day_chain, orats_symbol, dte_front, dte_buffer)
     if front is None:
         return row
     front_iv = front.get(iv_column)
@@ -100,8 +108,8 @@ def _resolve_one(day_chain: pd.DataFrame, ticker: str, on_date: date,
     row["front_iv"] = float(front_iv)
     row["underlying_close"] = float(front["stkPx"])
 
-    # ATM-ish strike at back DTE (call leg)
-    back = orats.find_atm_for_dte(day_chain, ticker, dte_back, dte_buffer)
+    # ATM-ish strike at back DTE (call leg) — same resolved symbol as front
+    back = orats.find_atm_for_dte(day_chain, orats_symbol, dte_back, dte_buffer)
     if back is None:
         return row
     back_iv = back.get(iv_column)
@@ -186,11 +194,19 @@ def discover_orats(
         # all 23 tickers including ETF additions in earnings_data.py).
         ef = EarningsFilter(polygon_client=None)
 
+    # Expand universe to include all rename predecessors so the loaded chain
+    # contains data under whichever ORATS symbol was active per date.
+    universe_expanded = orats.expand_universe_for_lookup(universe)
+    aliased = sorted(set(universe_expanded) - set(universe))
+    if aliased:
+        print(f"  ticker aliases active: {aliased} -> "
+              f"{[t for t in universe if t in orats.TICKER_HISTORY]}", flush=True)
+
     if use_cache:
         years = sorted({d.year for d in days})
-        print(f"  warming ORATS caches for {len(universe)} tickers × {len(years)} years...", flush=True)
+        print(f"  warming ORATS caches for {len(universe_expanded)} symbols × {len(years)} years...", flush=True)
         t_warm = time.time()
-        orats.warm_cache(universe, years, max_workers=1)
+        orats.warm_cache(universe_expanded, years, max_workers=1)
         print(f"  cache warm done in {time.time()-t_warm:.0f}s", flush=True)
         load_fn = lambda d, u: orats.load_orats_day_filtered(d, u)
     else:
@@ -205,7 +221,7 @@ def discover_orats(
     n_done = 0
 
     for d in days:
-        day_chain = load_fn(d, universe)
+        day_chain = load_fn(d, universe_expanded)
         for ticker in universe:
             for cell_name, dte_f, dte_b in cells:
                 row = _resolve_one(day_chain, ticker, d, dte_f, dte_b,
@@ -231,7 +247,7 @@ def discover_orats(
             "front_close", "back_close", "front_iv", "back_iv",
             "underlying_close", "ff", "estimated_debit",
             "back_leg_resolved", "earnings_blocked",
-            "discovery_run_id", "iv_source"]
+            "discovery_run_id", "iv_source", "orats_symbol_used"]
     df = pd.DataFrame(rows)
     df = df[cols].sort_values(["date", "ticker", "cell"]).reset_index(drop=True)
 
