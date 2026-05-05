@@ -1,8 +1,8 @@
 # Claude Code Handoff: Forward Factor Backtester
 
-## TL;DR — Three viable interpretations, deployment via stable-version (2026-05-03)
+## TL;DR — Polygon Tier 1 headline was data-noise driven; deployable strategy is modest (2026-05-05)
 
-> **Status update (2026-05-03, end of day)**: Phase 5 stable-version run completed and decisively reframes the strategy. Adding structural caps (half-Kelly + debit-floor $0.15 + 12% per-ticker NAV cap + asset-class caps) collapsed CAGR from +32.78% to **+6.48%** while shrinking MaxDD 26.68% → 8.66% and Ann Vol 53% → 11%; 6 of 7 concentration tests pass. **The unconstrained version's edge IS the near-zero-debit Kelly-overscale pattern** — strip that pattern and a +6.48% strategy is what's left. The lottery-ticket trades (IWM Jul 2024 +$305K winner AND KRE Apr 2026 −$258K loss) aren't outliers around the strategy; they ARE the strategy's primary alpha generator. There is no longer a single canonical allocation answer — three interpretations are now defensible (conservative stable 50/50, aggressive unconstrained 70/30, no-allocation-pending-validation). **Deployment recommendation: Phase A = 5% live STABLE + 10% paper STABLE + Tier 1 journal-only at 5% notional**; full sizing decision gated on ORATS extended-history results (~10-14 days ETA) per the Phase B decision tree below. Do **not** treat this handoff as decision-ready or research-arc-closed; the honest state is "deployable starting position via stable-version, full sizing decision pending."
+> **Status update (2026-05-05)**: ORATS adapter validation against the Polygon Tier 1 backtest produced a decisive finding: Polygon's headline +32.78% CAGR was materially driven by BS-IV inversion noise from stale/thin daily-bar closes, not by genuine signal edge. Spot-check on the IWM Jul 18 2024 trade (formerly framed as a +$305K outlier representing 22.4% of Polygon strategy P&L) showed the 218 ATM call traded $8.94-$8.99 bid/ask while Polygon recorded a $0.03 close — a stale print, not a tradable price. Across 666 Polygon-fire dates, 70-80% never crossed the FF≥0.20 threshold in either ORATS column (smoothSmvVol or extVol); only ~20-30% were genuine signals corroborated by clean quote-based IV. The Phase 5 stable hypothesis (strategy edge = near-zero-debit Kelly-overscale pattern) is now confirmed via independent data source: that pattern was Polygon-data noise, not real alpha. **Realistic strategy CAGR is ~+3-12% range pending extended-history validation, not +30%.** Deployable strategy is modest with diversification value, not a primary alpha source. Full extended-history work (2008-2026) is in progress; decisions on doc framing, allocation analysis, and deployment sizing will follow once ORATS Tier 1 results land across regimes.
 
 Independent backtest of the **Forward Factor calendar spread strategy** (Volatility Vibes / Campasano 2018), expanded to a 23-ticker multi-asset universe. Pipeline runs end-to-end on Polygon Options Advanced via `discover_candidates` → `simulate_portfolio` (refactored architecture, see "Pipeline" below).
 
@@ -31,23 +31,92 @@ Independent backtest of the **Forward Factor calendar spread strategy** (Volatil
 
 **Adding FF improves both CAGR AND MaxDD vs pure TQQQ-VT across every mix tested** — textbook diversification, driven by the −0.107 correlation. Max-Sharpe at 30% FF is in Steven's "meaningful allocation" bucket (>15%), not satellite.
 
-### Three viable interpretations (post-Phase 5 stable, 2026-05-03)
+### Updated framing (2026-05-05): Polygon Tier 1 result was data-noise-driven
 
-Phase 5 ran a stability-first variant of Tier 1 (half-Kelly + debit-floor $0.15 + 12% per-ticker NAV cap + asset-class caps). The result is the structural test the prior bracket framing implied: **strip the near-zero-debit Kelly-overscale pattern via caps and only +6.48% CAGR remains**. That collapses the prior "optimistic vs realistic" framing — both used the unconstrained engine — and replaces it with three defensible interpretations:
+The 2026-05-03 "three interpretations" framing (Conservative stable / Aggressive unconstrained / No-allocation-pending-validation) is **partially retired** by the 2022-2026 ORATS validation. The "Aggressive unconstrained" interpretation hinged on the +32.78% Polygon Tier 1 CAGR being a real-but-lottery-ticket-driven result. The validation showed something more fundamental: **the unconstrained engine's edge wasn't lottery-tickets-from-real-data — it was BS-IV inversion noise from stale/thin daily-bar closes that no actual fill could have captured.**
 
-| Interpretation | Config | Mix vs TQQQ-VT | CAGR | MaxDD% | Sharpe | Read |
-|---|---|---|---:|---:|---:|---|
-| **Conservative** (stable-version) | half-Kelly + caps | 50/50 max-Sharpe | **+16.66%** | **16.71%** | **1.12** | Improves portfolio risk-adjusted return through DD protection at cost of headline CAGR. Deployable today. |
-| **Aggressive** (unconstrained Tier 1) | quarter-Kelly, no caps | 70/30 max-Sharpe | **+32.31%** | **21.13%** | **1.26** | Accepts that strategy edge depends on near-zero-debit Kelly-overscale pattern that produced both biggest win (IWM Jul 2024 +$305K) AND biggest loss (KRE Apr 2026 −$258K). Lottery-ticket-shaped on both sides. |
-| **No allocation pending validation** | — | (paper-trade only) | — | — | — | Defer until ORATS extended history (2008/2018/2020) confirms whether the lottery-ticket pattern persists across regimes. |
+Three findings end the debate about whether Polygon's headline was real:
 
-All three are honest reads of the same data; the choice depends on Steven's confidence that the near-zero-debit pattern is reproducible. **Do not treat 70/30 as "the canonical answer" anymore** — that framing predates Phase 5 stable and was incomplete because it didn't account for the lottery-ticket structure of the unconstrained engine's alpha source.
+1. **IWM 2024-07-18 218C raw bid/ask in ORATS**: ATM call (spot $218.19, strike $218, 64 DTE) traded $8.94 / $8.99 bid/ask. Polygon recorded a $0.03 close — a stale print, mathematically incompatible with a 21% IV ATM option. The +$304,868 trade at 1,578 contracts × $0.0315 was Polygon-data fiction. ORATS captured the same date as a 16-contract × $0.42 trade returning +$1,779 — the realistic outcome.
 
-**Why both stable and unconstrained are kept on the table**: stable trades CAGR for stability and is deployable today; unconstrained captures real alpha *if* the pattern repeats but exposes you to symmetric tail-loss potential. ORATS extended history is the only data that can adjudicate.
+2. **666 Polygon-fire dates checked against ORATS IV**: Median ORATS smoothSmvVol FF on those days = +0.046; median extVol FF = +0.082. Only 20-30% crossed the 0.20 threshold in either ORATS column. The other 70-80% were Polygon-only signals where quote-based IV showed no backwardation at all.
 
-Reports: `output/PHASE_5_STABLE_VERSION.md`, `output/PHASE_5_STABLE_ALLOCATION.md`, `output/sim_e3fa28f120d1/` (stable simulation outputs).
+3. **Phase 5 stable + ORATS Tier 1 + ORATS Path-A all converge in a ~+3-7% band**: Three different mechanisms (caps suppress noise / different data source / different IV column) all collapse the result to roughly the same range. That's the real strategy CAGR; the +32.78% headline was the gap between real edge and added noise.
+
+**Updated three viable interpretations**:
+
+| Interpretation | Config | Mix vs TQQQ-VT | CAGR | Read |
+|---|---|---|---:|---|
+| **Conservative — deploy stable now** | half-Kelly + caps + 2 cells | 50/50 max-Sharpe | +16.66% combined | Validated by both Phase 5 stable (+6.48% standalone) and ORATS Tier 1 (+3.09% standalone). Deployable today as a portfolio diversifier. Standalone CAGR is modest; portfolio Sharpe uplift +0.22 vs pure TQQQ-VT. |
+| **Optimistic — methodology improvements** | 3 cells + extVol (Path A) + caps | TBD | est. ~+8-12% standalone | Diagnostics suggest 3-cell + extVol could push CAGR to 8-12%. Pending: extended history validation across 2008-2026 to confirm the methodology improvements survive regime stress. |
+| **Discard headline +32.78%** | — | — | — | The Polygon Tier 1 +32.78% / 70-30 mix +32.31% / Sharpe 1.26 numbers are **retired**. They were data artifacts, not research benchmarks. Anyone reading the project history needs this disclosure. |
+
+**Deployment recommendation (unchanged)**: Phase A = 5% live STABLE + 10% paper STABLE + Tier 1 journal-only at 5% notional. The journal-only Tier 1 ledger now carries an additional purpose: live-test the IWM-style noise pattern. If real-world fills mirror ORATS bid/ask pricing rather than Polygon's stale-close pricing, the journal-only Tier 1 should produce results closer to ORATS's +3.09% than Polygon's +32.78%, confirming the diagnostic.
+
+**Why the noise interpretation is more honest than "lottery-ticket pattern"**: A lottery-ticket pattern would still be a real strategy property — just a high-variance one. A data-noise-driven result isn't a property of the strategy at all; it's a property of which data source you used. The ORATS validation makes the latter the better explanation for the +32.78%.
+
+Reports: `output/PHASE_5_STABLE_VERSION.md`, `output/PHASE_5_STABLE_ALLOCATION.md`, `output/sim_e3fa28f120d1/` (stable). `output/PHASE_5_ORATS_ADAPTER_VALIDATION.md`, `output/PHASE_5_METHODOLOGY_DIAGNOSTICS.md`, `output/orats_validation/sim_fb5fb0d6b38e/` (ORATS validation).
 
 **Primary user**: Steven Goglanian, sgoglanian@gmail.com. Polygon Options Advanced paid through May 14, 2026 — downgrade May 30.
+
+## Why the original Polygon backtest overstated returns (added 2026-05-05)
+
+**This section is required reading before quoting any number from the Polygon Tier 1 result (`output/sim_4119dc073393/`)**. The 2022-2026 ORATS adapter validation surfaced a fundamental issue that wasn't visible during the Polygon-only research arc: the strategy's pipeline computes IVs by inverting Black-Scholes against Polygon's daily-bar closing price for ATM options. For thinly-traded strikes — including most of the strikes that produced the highest FF readings — the daily close is frequently a stale print far below the true bid/ask midpoint. Inverting BS against that stale price produces a fake-low IV, which produces a fake-high FF (front IV >> back IV when front IV is artificially deflated), which fires "signals" that no actual fill could ever capture.
+
+### The IWM Jul 18 2024 case study
+
+Single highest-impact trade in the Polygon Tier 1 result (`output/sim_4119dc073393/trade_log.csv`):
+
+| Field | Polygon record | ORATS reality (same date, same strike) |
+|---|---:|---:|
+| Front strike (ATM call) | $218 | $218 |
+| Spot price | ~$218 | $218.19 |
+| Front leg DTE | ~64 | 64 (chain expiry 2024-09-20) |
+| Front leg cBidPx | (not recorded; BS inverted) | **$8.94** |
+| Front leg cAskPx | (not recorded; BS inverted) | **$8.99** |
+| Front leg cMidPx | (not recorded; BS inverted) | **$8.965** |
+| Front leg `cValue` (ORATS smooth-fair) | — | $8.96 |
+| Front leg cMidIv | (BS-inverted from close) | **0.2122** |
+| **Polygon's recorded entry_debit (calendar)** | **$0.0315** | impossible at this IV |
+| ORATS' realistic calendar debit | — | ~$1.50-$2.00 |
+| Polygon contracts (Kelly-sized off $0.0315) | **1,578** | — |
+| ORATS contracts (Kelly-sized off ~$1.75) | — | 16 |
+| Polygon recorded P&L | **+$304,868** | — |
+| ORATS measured P&L | — | +$1,779 |
+| Share of total Polygon strategy P&L | **22.4%** | — |
+
+This single Polygon record represents 22.4% of total Polygon strategy P&L. It was previously framed as a "near-zero-debit Kelly-overscale lottery-ticket trade" — a real but high-variance phenomenon. The ORATS data shows the truth: the $0.0315 debit was a backtest artifact derived from a stale daily-bar print. Steven could not have entered this trade at $0.0315; the realistic fill price was ~$1.75. At that price, Kelly sizes ~16 contracts, not 1,578, and the realistic outcome is ~+$1,779.
+
+### How systematic is the noise?
+
+We checked all 666 (cell, ticker, date) signals from the Polygon Tier 1 trade log against ORATS' two IV columns on the same dates:
+
+| ORATS IV column | Median FF on Polygon-fire days | % crossing 0.20 threshold |
+|---|---:|---:|
+| smoothSmvVol (smoothed surface) | +0.046 | **20.1%** |
+| extVol (ex-earnings IV) | +0.082 | **29.3%** |
+
+**70-80% of Polygon-fire days showed no FF backwardation at all in ORATS data**, regardless of IV column choice. Only the 20-30% that ORATS independently confirmed are real signals — and those produced the +3.09% standalone CAGR in the ORATS Tier 1 backtest, in the same band as Phase 5 stable's +6.48%.
+
+### Three independent confirmations of the modest-CAGR finding
+
+| Mechanism | CAGR | Why this kills the noise |
+|---|---:|---|
+| Polygon Tier 1 unconstrained | +32.78% | (the contaminated number) |
+| Polygon Phase 5 stable (caps neutralize outliers) | +6.48% | Per-ticker NAV caps + debit-floor mechanically cap any single trade's contribution; the noise-driven 1,578-contract IWM trade gets trimmed to ~12 contracts |
+| ORATS Tier 1 unconstrained smoothSmvVol | +3.09% | Bid/ask quote pricing rejects phantom fills; ORATS smoothing also dampens IV spikes that would have produced false-positive FF readings |
+
+Three different fixes (cap-based / data-source-based / column-based) all collapse the result to the +3-7% band. That convergence makes the modest-CAGR conclusion robust.
+
+### What this means for forward expectations
+
+The deployable strategy is **fundamentally modest** with diversification value vs Steven's TQQQ-VT, not a +30% standalone CAGR alpha source. The 70/30 max-Sharpe answer (Sharpe 1.26, +32.31% combined CAGR) that anchored deployment recommendations through 2026-05-03 is **retired**. Pending extended-history work (2008-2026, methodology-improved with 3-cell + extVol Path A), realistic standalone CAGR is **+3% to +12%** range. Allocation analysis must be re-done on this scale.
+
+### What this DOESN'T change
+
+- Phase 5 stable's +6.48% standalone CAGR was derived from the same Polygon data but with caps that mechanically suppressed the noise-driven trades. It survives this finding cleanly.
+- The −0.107 daily-returns correlation with TQQQ-VT is a structural property of FF (it's a vol term-structure strategy, TQQQ-VT is a vol-targeted equity strategy — they respond to different shocks at different times). Diversification benefit is real even if the standalone CAGR is modest.
+- The ATM call calendar mechanics, FF computation, and earnings filter logic are all correct. The validation found a data-quality issue, not a strategy-logic bug.
 
 ## How to Pick This Up
 
