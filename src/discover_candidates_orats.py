@@ -153,6 +153,7 @@ def discover_orats(
     iv_column: str = "smoothSmvVol",
     earnings_filter_enabled: bool = True,
     dte_buffer: int = 5,
+    dte_buffer_by_year: Optional[dict[int, int]] = None,
     progress_every: int = 200,
     use_cache: Optional[bool] = None,
 ) -> tuple[str, pd.DataFrame]:
@@ -170,6 +171,14 @@ def discover_orats(
         raise ValueError(f"Unsupported iv_column={iv_column!r}; "
                          f"choose from {SUPPORTED_IV_COLUMNS}")
 
+    def _buffer_for_date(d: date) -> int:
+        """Return dte_buffer for trade date `d`. Era-aware via
+        dte_buffer_by_year mapping when provided; falls back to static
+        dte_buffer otherwise."""
+        if dte_buffer_by_year is None:
+            return dte_buffer
+        return dte_buffer_by_year.get(d.year, dte_buffer)
+
     days = _trading_days_with_data(start_date, end_date)
     n_total = len(days) * len(universe) * len(cells)
     discovery_run_id = str(uuid.uuid4())
@@ -184,6 +193,11 @@ def discover_orats(
     print(f"  window: {start_date} -> {end_date}  ({len(days)} trading days with data)", flush=True)
     print(f"  universe: {len(universe)} tickers  |  cells: {[c[0] for c in cells]}", flush=True)
     print(f"  total samples: {n_total:,}  |  use_cache={use_cache}", flush=True)
+    if dte_buffer_by_year is not None:
+        sorted_buf = sorted(dte_buffer_by_year.items())
+        print(f"  dte_buffer_by_year: {sorted_buf}  (fallback={dte_buffer})", flush=True)
+    else:
+        print(f"  dte_buffer: {dte_buffer} (static)", flush=True)
 
     # Earnings filter (uses hardcoded calendar; data-source-agnostic)
     ef: Optional[EarningsFilter] = None
@@ -222,10 +236,11 @@ def discover_orats(
 
     for d in days:
         day_chain = load_fn(d, universe_expanded)
+        buf_today = _buffer_for_date(d)
         for ticker in universe:
             for cell_name, dte_f, dte_b in cells:
                 row = _resolve_one(day_chain, ticker, d, dte_f, dte_b,
-                                   dte_buffer, iv_column, ef)
+                                   buf_today, iv_column, ef)
                 row["date"] = d
                 row["cell"] = cell_name
                 row["discovery_run_id"] = discovery_run_id

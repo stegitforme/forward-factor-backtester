@@ -605,11 +605,13 @@ class OratsBarsClient:
         else:
             symbols_to_query = [underlying]
 
-        # ORATS rows for this ticker exist in (year of expiry) and possibly
-        # the year before. Fetch from start-of-expiry-year-minus-1 through
-        # expiry, slice to dates with this exact (expiry, strike, type).
-        start_year = expiry.year - 1 if expiry.month <= 3 else expiry.year
-        start_date = date(start_year, 1, 1)
+        # Options have a finite lifetime — typically listed ~6-9 months before
+        # expiry. Reading the full year(s) up to expiry triggers wasteful cache
+        # builds for years we don't need. Bound the lookback to ~210 calendar
+        # days (covers LEAPS-style 6-month listings + buffer); for the FF
+        # strategy's 30-90 DTE cells, this is far more than needed.
+        LOOKBACK_DAYS = 210
+        start_date = expiry - timedelta(days=LOOKBACK_DAYS)
 
         all_chunks = []
         for sym in symbols_to_query:
