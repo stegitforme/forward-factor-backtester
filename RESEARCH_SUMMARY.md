@@ -1,12 +1,91 @@
 # Forward Factor Backtester — Research Summary
 
-> Self-contained snapshot of the project as of **2026-05-05 (post ORATS adapter validation)**. If you've never seen this codebase before (including a future Steven who's lost the context), start here. For full state details see `CLAUDE_CODE_HANDOFF.md`, especially the section "Why the original Polygon backtest overstated returns".
+> Self-contained snapshot of the project as of **2026-05-05 (FINAL, post ORATS extended-history backtest)**. If you've never seen this codebase before (including a future Steven who's lost the context), start here. For full forensic trail see `CLAUDE_CODE_HANDOFF.md`, especially "Why the original Polygon backtest overstated returns" and the per-regime tables.
 
-> **Status**: Polygon Tier 1 headline (+32.78% CAGR) was **data-noise-driven**, not a real research benchmark. ORATS-based validation against the same 2022-2026 window produced +3.09% standalone CAGR; Phase 5 stable produced +6.48% (independent mechanism). Three independent treatments (caps / different data source / different IV column) all collapse the result to the **+3-7% range**. The single highest-impact Polygon trade (IWM Jul 18 2024, recorded as 1,578 contracts × $0.0315 debit → +$305K, 22.4% of total Polygon P&L) was a stale-close-print artifact: ORATS shows the same ATM call traded $8.94-$8.99 bid/ask. Realistic deployable strategy is modest with diversification value vs Steven's TQQQ-VT. **Deployment via Phase A: 5% live STABLE + 10% paper STABLE + Tier 1 journal-only at 5% notional.** Full sizing pending extended-history work (2008-2026) on the methodology-improved config (3 cells + extVol Path A).
+> **FINAL STATUS**: The Forward Factor strategy has no deployable edge. Polygon's headline +32.78% CAGR was BS-IV inversion noise from stale daily-bar closes (single-trade case study: IWM Jul 18 2024 218C, Polygon recorded $0.03 close on an ATM call that ORATS shows trading $8.94-$8.99 bid/ask — mathematically untradable). On clean ORATS data 2008-2026 (18+ years, 3,131 trades, 3 cells, extVol Path A, era-adaptive dte_buffer), the strategy delivers **+1.83% CAGR** (Tier 1 unconstrained) / **+1.35% CAGR** (Phase 5 stable with caps). It LOSES money in major vol regimes: −13.47% in COVID Feb-Apr 2020, −6.52% in Feb 2018 Volmageddon, −2.14% in 2015 H2 yuan deval. Diversification benefit also vanishes on clean data: correlation with TQQQ-VT is **+0.040** (was −0.107 on noisy Polygon data); max-Sharpe mix delivers Sharpe uplift of just +0.02 over pure TQQQ-VT. **Recommendation: SHELVE.** Do not deploy live, do not paper-trade. Operational complexity (multi-leg orders on 23 underliers, daily exit management, earnings tracking) is not justified by ~+1% CAGR with negative-regime exposure.
 
 ## The strategy in one paragraph
 
 The **Forward Factor (FF)** is a vol term-structure metric from the Volatility Vibes YouTube channel, validated against Campasano's 2018 SSRN paper "Term Structure Forecasts of Volatility." When front-month implied volatility is materially higher than the forward-implied vol between front and back month (FF ≥ 0.20), VV's thesis is that long-calendar spreads (sell front, buy back) capture systematic mispricing as the front leg's elevated IV decays faster than the back. We built an independent backtest covering 2022-01-03 → 2026-04-30 (~1,129 trading days) and found, after extensive validation, that **the strategy is real but modest** — standalone CAGR in the +3-7% range on clean data (ORATS bid/ask quotes) vs the +32.78% the original Polygon backtest reported (which was inflated by BS-IV inversion noise from stale daily-bar closes at thin strikes). The −0.107 daily-returns correlation with Steven's TQQQ-VT is structurally robust across data sources, making FF a genuine diversifier even at the realistic standalone CAGR.
+
+## Final result — strategy has no deployable edge
+
+The 18+-year ORATS backtest with methodology improvements (3 cells + extVol Path A) is the definitive finding. Earlier "modest strategy with diversification value" framing (morning of 2026-05-05) was based on the favorable 2022-2026 sub-period; extending to 2008-2026 reveals the strategy doesn't have edge in older regimes either.
+
+### Standalone CAGR by config and window
+
+| Config | Window | CAGR | Trades | Status |
+|---|---|---:|---:|---|
+| Polygon Tier 1 unconstrained | 2022-2026 | +32.78% | 643 | **RETIRED — data noise** |
+| Polygon Phase 5 stable (caps) | 2022-2026 | +6.48% | 643 | Caps suppressed noise; clean number is much lower |
+| ORATS Tier 1 (2-cell smvVol, earnings filter) | 2022-2026 | +3.09% | 491 | Adapter validation result |
+| **ORATS Tier 1 (3-cell extVol Path A)** | **2008-2026** | **+1.83%** | **3,131** | **Definitive standalone** |
+| **ORATS Stable (3-cell extVol + caps)** | **2008-2026** | **+1.35%** | **3,128** | **Caps don't help** |
+
+### Per-regime Tier 1 CAGR (clean ORATS, full extended history)
+
+| Regime | CAGR | Trades | Tickers | Reads |
+|---|---:|---:|---:|---|
+| 2008 H2 GFC | +0.03% | 165 | 17/23 | Near-zero |
+| 2009 recovery | +0.14% | 155 | 19/23 | Near-zero |
+| 2010-2014 grind | +3.77% | 484 | 20/23 | Best non-current period |
+| 2015 H2 yuan deval | **−2.14%** | 125 | 21/23 | Negative |
+| 2016 H1 Brexit | +8.10% | 85 | 21/23 | Best regime overall |
+| **2018 Feb Volmageddon** | **−6.52%** | 36 | 21/23 | **Loses on vol crash** |
+| **2020 Feb-Apr COVID** | **−13.47%** | 73 | 22/23 | **Loses badly on vol spike** |
+| 2022-2026 current era | +0.88% | 953 | 23/23 | Flat |
+
+The strategy LOSES money in the regimes where a vol-term-structure trade is supposed to perform best. When real vol crashes happen, the underlying moves more than the IV anticipates and the calendar gets crushed. The thesis "FF ≥ 0.20 captures vol-collapse mispricing" doesn't survive contact with actual vol crashes.
+
+### Allocation analysis on clean data
+
+Daily-returns correlation FF Tier 1 vs TQQQ-VT (2022-2026 overlap, the only window where TQQQ-VT data exists): **+0.040** — slightly positive, not negative. The −0.107 correlation that anchored the earlier diversification argument was noise-driven.
+
+| Mix (TQQQ-VT/FF Tier 1) | CAGR | MaxDD% | Sharpe |
+|---|---:|---:|---:|
+| 100/0 (pure TQQQ-VT) | +24.46% | 31.43% | 0.90 |
+| 90/10 | +22.35% | 28.66% | 0.91 |
+| 70/30 (was max-Sharpe in noisy version) | +17.93% | 22.85% | 0.91 |
+| **50/50 max-Sharpe (clean)** | **+13.27%** | **16.70%** | **0.92** |
+| 0/100 (pure FF) | +0.88% | 7.59% | 0.19 |
+
+Sharpe uplift at max-Sharpe mix: **+0.02** over pure TQQQ-VT. CAGR cost: −11.19pp. Translation: there's almost no mathematical reason to add FF — pure TQQQ-VT does almost as well risk-adjusted, with much higher CAGR.
+
+### The IWM Jul 2024 disclosure (single most important data point)
+
+The case study that ended the debate about whether Polygon's +32.78% was real:
+
+| | Polygon record | ORATS bid/ask reality |
+|---|---:|---:|
+| ATM 218C entry price (front leg) | $0.03 (stale close) | $8.94 / $8.99 / $8.96 (mid) |
+| Implied calendar debit | $0.0315 | ~$1.50-$2 |
+| Kelly-sized contracts | 1,578 | 16 |
+| Recorded P&L | +$304,868 | +$1,779 |
+| % of total strategy P&L | 22.4% | 0.13% |
+
+A 64-DTE ATM call at 21% IV cannot trade at $0.03. The Polygon entry was a stale daily-bar print, not a tradable price. This single trade carried 22.4% of total Polygon strategy P&L — and the corresponding ORATS trade carries 0.13%. The pattern is systematic: Polygon's BS-IV inversion against thin/stale closes produces phantom signals, the highest-FF ones get Kelly-overscaled into the trade log, and they dominate aggregate P&L.
+
+## What this means
+
+**The research arc is closed; the answer is the strategy doesn't work as advertised.** Volatility Vibes' published +27% CAGR claim isn't reproducible from clean data; our independent ORATS backtest produces +1-2% CAGR over 18+ years with negative exposure to major vol events. The diversification benefit that was the project's fallback case is also gone (correlation +0.04, not −0.11).
+
+**Recommendation: SHELVE the strategy.** Do not deploy live, do not paper-trade. The original go/no-go criteria from the project README all fail on clean data:
+
+- CAGR ≥ 15%: ❌ (+1.83% over 18 years)
+- Worst-cell Sharpe ≥ 1.0: ❌
+- 2022 standalone return ≥ 0%: ✓ but barely (+0.88%)
+- Win rate 50-70%: TBD (likely below 50% given negative-regime exposure)
+- Max DD ≤ 25%: ✓ (because trade size is small, not because strategy is robust)
+
+**What was learned (positive):**
+- ORATS adapter built; reusable for future options-strategy backtests
+- IWM Jul 2024 case study is a clean teaching moment about the dangers of close-price BS-IV inversion at thin strikes
+- Polygon's daily option bars are unreliable for backtest purposes at non-front-month / non-ATM contracts
+- VV's published claims should be treated skeptically pending independent replication on bid/ask quote data
+
+---
+
+(The rest of this document preserves the prior narrative arc for forensic context. The "three confirmations of a modest strategy" section below was the morning-of-2026-05-05 framing; it has been superseded by the extended-history result above. Keeping for the audit trail.)
 
 ## The headline result — three confirmations of a modest strategy
 

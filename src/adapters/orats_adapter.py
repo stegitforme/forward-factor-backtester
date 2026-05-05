@@ -163,6 +163,27 @@ def has_data_for(d: date) -> bool:
 # Raw ZIP reads
 # ============================================================================
 
+def _read_orats_zip(zp: Path) -> pd.DataFrame:
+    """Robust read of an ORATS ZIP. Most ZIPs contain a single CSV at the
+    archive root; a few (e.g., 2020-01-28) have a nested directory wrapping
+    the CSV. pandas chokes on the latter ('Multiple files found in ZIP'),
+    so fall back to manual zipfile + io.BytesIO.
+    """
+    try:
+        return pd.read_csv(zp, compression="zip", usecols=KEEP_COLUMNS)
+    except ValueError as e:
+        if "Multiple files" not in str(e):
+            raise
+    # Nested ZIP fallback: find the .csv file inside and read it directly
+    import zipfile, io
+    with zipfile.ZipFile(zp) as zf:
+        csv_names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+        if not csv_names:
+            return pd.DataFrame(columns=KEEP_COLUMNS)
+        with zf.open(csv_names[0]) as f:
+            return pd.read_csv(io.BytesIO(f.read()), usecols=KEEP_COLUMNS)
+
+
 def load_orats_day_raw(d: date) -> pd.DataFrame:
     """Read one full-chain ORATS day from ZIP. Returns empty DF if missing.
 
@@ -173,7 +194,7 @@ def load_orats_day_raw(d: date) -> pd.DataFrame:
     if not zp.exists():
         log.debug("ORATS ZIP missing for %s: %s", d, zp)
         return pd.DataFrame(columns=KEEP_COLUMNS)
-    df = pd.read_csv(zp, compression="zip", usecols=KEEP_COLUMNS)
+    df = _read_orats_zip(zp)
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
     df["expirDate"] = pd.to_datetime(df["expirDate"]).dt.date
     return df
@@ -258,7 +279,7 @@ def _build_year_cache(ticker: str, year: int) -> pd.DataFrame:
     chunks = []
     for z in zips:
         try:
-            df = pd.read_csv(z, compression="zip", usecols=KEEP_COLUMNS)
+            df = _read_orats_zip(z)
             df = df[df["ticker"] == ticker]
             if not df.empty:
                 chunks.append(df)
@@ -310,7 +331,7 @@ def warm_year_for_universe(year: int, tickers: Iterable[str]) -> None:
     chunks: dict[str, list[pd.DataFrame]] = {t: [] for t in pending_set}
     for z in zips:
         try:
-            df = pd.read_csv(z, compression="zip", usecols=KEEP_COLUMNS)
+            df = _read_orats_zip(z)
             df = df[df["ticker"].isin(pending_set)]
             if df.empty:
                 continue
